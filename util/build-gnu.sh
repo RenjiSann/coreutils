@@ -366,3 +366,8 @@ sed -i  's/44;37/37;44/' tests/ls/multihardlink.sh
 # do that. So, it's okay to ignore the zero.
 sed -i  "s/color_code='0;31;42'/color_code='31;42'/" tests/ls/color-clear-to-eol.sh
 
+# Most tests check that `/usr/bin/tr` is working correctly before running.
+# However in NixOS/Nix-based distros, the tr coreutil is located somewhere in
+# /nix/store/xxxxxxxxxxxx...xxxx/bin/tr
+# We just replace the references to `/usr/bin/tr` with the result of `$(which tr)`
+sed -i  's/\/usr\/bin\/tr/$(which tr)/' tests/init.sh
