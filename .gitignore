@@ -16,3 +16,7 @@ lib*.a
 *.iml
 ### macOS ###
 .DS_Store
+
+### Nix ###
+/.envrc
+/.direnv/
