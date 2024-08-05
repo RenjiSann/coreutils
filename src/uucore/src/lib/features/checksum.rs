@@ -112,12 +112,39 @@ pub enum ChecksumError {
     NeedAlgorithmToHash,
     #[error("{filename}: no properly formatted checksum lines found")]
     NoProperlyFormattedChecksumLinesFound { filename: String },
+    #[error("NOT TO DISPLAY")]
+    ImproperlyFormattedLine,
 }
 
 impl UError for ChecksumError {
     fn code(&self) -> i32 {
         1
     }
+}
+
+struct ChecksumOptions {
+    /// Display warning information.
+    warn: bool,
+    /// Do not print successful checksums.
+    quiet: bool,
+    /// Do not print anything, only the exit code
+    /// should indicate the result of the command.
+    status: bool,
+    ignore_missing: bool,
+    binary: bool,
+}
+
+#[derive(Debug)]
+enum EvaluationStatus {
+    ChecksumSuccess,
+    ChecksumFail,
+    Skipped,
+}
+
+#[derive(Debug)]
+enum EvaluationError {
+    ChecksumError(Box<dyn UError>),
+    ImproperlyFormattedLine,
 }
 
 /// Creates a SHA3 hasher instance based on the specified bits argument.
@@ -179,102 +206,134 @@ fn cksum_output(res: &ChecksumResult, ignore_missing: bool, status: bool) {
     }
 }
 
-pub fn detect_algo(algo: &str, length: Option<usize>) -> UResult<HashAlgorithm> {
-    match algo {
-        ALGORITHM_OPTIONS_SYSV => Ok(HashAlgorithm {
-            name: ALGORITHM_OPTIONS_SYSV,
-            create_fn: Box::new(|| Box::new(SYSV::new())),
-            bits: 512,
-        }),
-        ALGORITHM_OPTIONS_BSD => Ok(HashAlgorithm {
-            name: ALGORITHM_OPTIONS_BSD,
-            create_fn: Box::new(|| Box::new(BSD::new())),
-            bits: 1024,
-        }),
-        ALGORITHM_OPTIONS_CRC => Ok(HashAlgorithm {
-            name: ALGORITHM_OPTIONS_CRC,
-            create_fn: Box::new(|| Box::new(CRC::new())),
-            bits: 256,
-        }),
-        ALGORITHM_OPTIONS_MD5 | "md5sum" => Ok(HashAlgorithm {
-            name: ALGORITHM_OPTIONS_MD5,
-            create_fn: Box::new(|| Box::new(Md5::new())),
-            bits: 128,
-        }),
-        ALGORITHM_OPTIONS_SHA1 | "sha1sum" => Ok(HashAlgorithm {
-            name: ALGORITHM_OPTIONS_SHA1,
-            create_fn: Box::new(|| Box::new(Sha1::new())),
-            bits: 160,
-        }),
-        ALGORITHM_OPTIONS_SHA224 | "sha224sum" => Ok(HashAlgorithm {
-            name: ALGORITHM_OPTIONS_SHA224,
-            create_fn: Box::new(|| Box::new(Sha224::new())),
-            bits: 224,
-        }),
-        ALGORITHM_OPTIONS_SHA256 | "sha256sum" => Ok(HashAlgorithm {
-            name: ALGORITHM_OPTIONS_SHA256,
-            create_fn: Box::new(|| Box::new(Sha256::new())),
-            bits: 256,
-        }),
-        ALGORITHM_OPTIONS_SHA384 | "sha384sum" => Ok(HashAlgorithm {
-            name: ALGORITHM_OPTIONS_SHA384,
-            create_fn: Box::new(|| Box::new(Sha384::new())),
-            bits: 384,
-        }),
-        ALGORITHM_OPTIONS_SHA512 | "sha512sum" => Ok(HashAlgorithm {
-            name: ALGORITHM_OPTIONS_SHA512,
-            create_fn: Box::new(|| Box::new(Sha512::new())),
-            bits: 512,
-        }),
-        ALGORITHM_OPTIONS_BLAKE2B | "b2sum" => {
-            // Set default length to 512 if None
-            let bits = length.unwrap_or(512);
-            if bits == 512 {
+#[derive(Debug, Default)]
+pub struct ChecksumAlgoBuilder<'cli> {
+    /// The name of the CLI `--algo` if provided
+    cli_algo_argument: Option<&'cli str>,
+    algo: Option<String>,
+    length: Option<usize>,
+}
+
+impl<'cli> ChecksumAlgoBuilder<'cli> {
+    pub fn new(cli_algo: Option<&'cli str>) -> Self {
+        Self {
+            cli_algo_argument: cli_algo,
+            ..Default::default()
+        }
+    }
+
+    pub fn algo_name(&mut self, algo: String) -> &mut Self {
+        self.algo = Some(algo);
+        self
+    }
+
+    pub fn algo_length(&mut self, length: usize) -> &mut Self {
+        self.length = Some(length);
+        self
+    }
+
+    pub fn try_build(self) -> UResult<HashAlgorithm> {
+        let Some(name) = self.algo else {
+            return Err(Box::new(ChecksumError::NeedAlgorithmToHash));
+        };
+        match name.as_str() {
+            ALGORITHM_OPTIONS_SYSV => Ok(HashAlgorithm {
+                name: ALGORITHM_OPTIONS_SYSV,
+                create_fn: Box::new(|| Box::new(SYSV::new())),
+                bits: 512,
+            }),
+            ALGORITHM_OPTIONS_BSD => Ok(HashAlgorithm {
+                name: ALGORITHM_OPTIONS_BSD,
+                create_fn: Box::new(|| Box::new(BSD::new())),
+                bits: 1024,
+            }),
+            ALGORITHM_OPTIONS_CRC => Ok(HashAlgorithm {
+                name: ALGORITHM_OPTIONS_CRC,
+                create_fn: Box::new(|| Box::new(CRC::new())),
+                bits: 256,
+            }),
+            ALGORITHM_OPTIONS_MD5 | "md5sum" => Ok(HashAlgorithm {
+                name: ALGORITHM_OPTIONS_MD5,
+                create_fn: Box::new(|| Box::new(Md5::new())),
+                bits: 128,
+            }),
+            ALGORITHM_OPTIONS_SHA1 | "sha1sum" => Ok(HashAlgorithm {
+                name: ALGORITHM_OPTIONS_SHA1,
+                create_fn: Box::new(|| Box::new(Sha1::new())),
+                bits: 160,
+            }),
+            ALGORITHM_OPTIONS_SHA224 | "sha224sum" => Ok(HashAlgorithm {
+                name: ALGORITHM_OPTIONS_SHA224,
+                create_fn: Box::new(|| Box::new(Sha224::new())),
+                bits: 224,
+            }),
+            ALGORITHM_OPTIONS_SHA256 | "sha256sum" => Ok(HashAlgorithm {
+                name: ALGORITHM_OPTIONS_SHA256,
+                create_fn: Box::new(|| Box::new(Sha256::new())),
+                bits: 256,
+            }),
+            ALGORITHM_OPTIONS_SHA384 | "sha384sum" => Ok(HashAlgorithm {
+                name: ALGORITHM_OPTIONS_SHA384,
+                create_fn: Box::new(|| Box::new(Sha384::new())),
+                bits: 384,
+            }),
+            ALGORITHM_OPTIONS_SHA512 | "sha512sum" => Ok(HashAlgorithm {
+                name: ALGORITHM_OPTIONS_SHA512,
+                create_fn: Box::new(|| Box::new(Sha512::new())),
+                bits: 512,
+            }),
+            ALGORITHM_OPTIONS_BLAKE2B | "b2sum" => {
+                // Set default length to 512 if None
+                let bits = self.length.unwrap_or(512);
+                if bits == 512 {
+                    Ok(HashAlgorithm {
+                        name: ALGORITHM_OPTIONS_BLAKE2B,
+                        create_fn: Box::new(move || Box::new(Blake2b::new())),
+                        bits: 512,
+                    })
+                } else {
+                    Ok(HashAlgorithm {
+                        name: ALGORITHM_OPTIONS_BLAKE2B,
+                        create_fn: Box::new(move || Box::new(Blake2b::with_output_bytes(bits))),
+                        bits,
+                    })
+                }
+            }
+            ALGORITHM_OPTIONS_BLAKE3 | "b3sum" => Ok(HashAlgorithm {
+                name: ALGORITHM_OPTIONS_BLAKE3,
+                create_fn: Box::new(|| Box::new(Blake3::new())),
+                bits: 256,
+            }),
+            ALGORITHM_OPTIONS_SM3 => Ok(HashAlgorithm {
+                name: ALGORITHM_OPTIONS_SM3,
+                create_fn: Box::new(|| Box::new(Sm3::new())),
+                bits: 512,
+            }),
+            ALGORITHM_OPTIONS_SHAKE128 | "shake128sum" => {
+                let bits = self
+                    .length
+                    .ok_or_else(|| USimpleError::new(1, "--bits required for SHAKE128"))?;
                 Ok(HashAlgorithm {
-                    name: ALGORITHM_OPTIONS_BLAKE2B,
-                    create_fn: Box::new(move || Box::new(Blake2b::new())),
-                    bits: 512,
-                })
-            } else {
-                Ok(HashAlgorithm {
-                    name: ALGORITHM_OPTIONS_BLAKE2B,
-                    create_fn: Box::new(move || Box::new(Blake2b::with_output_bytes(bits))),
+                    name: ALGORITHM_OPTIONS_SHAKE128,
+                    create_fn: Box::new(|| Box::new(Shake128::new())),
                     bits,
                 })
             }
-        }
-        ALGORITHM_OPTIONS_BLAKE3 | "b3sum" => Ok(HashAlgorithm {
-            name: ALGORITHM_OPTIONS_BLAKE3,
-            create_fn: Box::new(|| Box::new(Blake3::new())),
-            bits: 256,
-        }),
-        ALGORITHM_OPTIONS_SM3 => Ok(HashAlgorithm {
-            name: ALGORITHM_OPTIONS_SM3,
-            create_fn: Box::new(|| Box::new(Sm3::new())),
-            bits: 512,
-        }),
-        ALGORITHM_OPTIONS_SHAKE128 | "shake128sum" => {
-            let bits =
-                length.ok_or_else(|| USimpleError::new(1, "--bits required for SHAKE128"))?;
-            Ok(HashAlgorithm {
-                name: ALGORITHM_OPTIONS_SHAKE128,
-                create_fn: Box::new(|| Box::new(Shake128::new())),
-                bits,
-            })
-        }
-        ALGORITHM_OPTIONS_SHAKE256 | "shake256sum" => {
-            let bits =
-                length.ok_or_else(|| USimpleError::new(1, "--bits required for SHAKE256"))?;
-            Ok(HashAlgorithm {
-                name: ALGORITHM_OPTIONS_SHAKE256,
-                create_fn: Box::new(|| Box::new(Shake256::new())),
-                bits,
-            })
-        }
-        //ALGORITHM_OPTIONS_SHA3 | "sha3" => (
-        _ if algo.starts_with("sha3") => create_sha3(length),
+            ALGORITHM_OPTIONS_SHAKE256 | "shake256sum" => {
+                let bits = self
+                    .length
+                    .ok_or_else(|| USimpleError::new(1, "--bits required for SHAKE256"))?;
+                Ok(HashAlgorithm {
+                    name: ALGORITHM_OPTIONS_SHAKE256,
+                    create_fn: Box::new(|| Box::new(Shake256::new())),
+                    bits,
+                })
+            }
+            //ALGORITHM_OPTIONS_SHA3 | "sha3" => (
+            _ if name.starts_with("sha3") => create_sha3(self.length),
 
-        _ => Err(ChecksumError::UnknownAlgorithm.into()),
+            _ => Err(ChecksumError::UnknownAlgorithm.into()),
+        }
     }
 }
 
@@ -439,6 +498,7 @@ fn identify_algo_name_and_length(
     let algorithm = caps
         .name("algo")
         .map_or(String::new(), |m| {
+            // Unwrap is safe because the Regex checks UTF-8 validity
             String::from_utf8(m.as_bytes().into()).unwrap()
         })
         .to_lowercase();
@@ -474,6 +534,138 @@ fn identify_algo_name_and_length(
     Some((algorithm, bits))
 }
 
+fn process_line(
+    line: &OsStr,
+    line_number: usize,
+    chosen_regex: &Regex,
+    algo_name_input: Option<&str>,
+    length_input: Option<usize>,
+    is_algo_based_format: bool,
+    filename_input: &OsStr,
+    opts: ChecksumOptions,
+) -> Result<EvaluationStatus, EvaluationError> {
+    let line_bytes = os_str_as_bytes(line).expect("UTF-8 decoding failure");
+    if let Some(caps) = chosen_regex.captures(line_bytes) {
+        properly_formatted = true;
+
+        let mut filename_to_check = caps.name("filename").unwrap().as_bytes();
+
+        if filename_to_check.starts_with(b"*")
+            && line_number == 0
+            && chosen_regex.as_str() == SINGLE_SPACE_REGEX
+        {
+            // Remove the leading asterisk if present - only for the first line
+            filename_to_check = &filename_to_check[1..];
+        }
+
+        let filename_lossy = String::from_utf8_lossy(filename_to_check);
+        let expected_checksum = get_expected_checksum(&filename_lossy, &caps, &chosen_regex)?;
+
+        let mut algo_builder = ChecksumAlgoBuilder::new(algo_name_input);
+
+        // If the algo_name is provided, we use it, otherwise we try to detect it
+        let (algo_name, length) = if is_algo_based_format {
+            let regex_algo = caps
+                .name("algo")
+                // Unwrap is safe because the regex checked UTF-8 validity.
+                .map(|m| String::from_utf8(m.as_bytes().into()).unwrap());
+
+            let regex_bits = caps.name("bits").map(|m| {
+                let bits = String::from_utf8(m.as_bytes().into())
+                    // Again, unwrap are safe because of regex.
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap();
+
+                if bits % 8 == 0 {
+                    bits / 8
+                } else {
+                    bits
+                }
+            });
+
+            identify_algo_name_and_length(&caps, algo_name_input, &mut res, &mut properly_formatted)
+                .unwrap_or((String::new(), None))
+        } else if let Some(a) = algo_name_input {
+            // When a specific algorithm name is input, use it and use the provided bits
+            // except when dealing with blake2b, where we will detect the length
+            if algo_name_input == Some(ALGORITHM_OPTIONS_BLAKE2B) {
+                // division by 2 converts the length of the Blake2b checksum from hexadecimal
+                // characters to bytes, as each byte is represented by two hexadecimal characters.
+                let length = Some(expected_checksum.len() / 2);
+                (ALGORITHM_OPTIONS_BLAKE2B.to_string(), length)
+            } else {
+                (a.to_lowercase(), length_input)
+            }
+        } else {
+            // Default case if no algorithm is specified and non-algo based format is matched
+            (String::new(), None)
+        };
+
+        if algo_name.is_empty() {
+            // we haven't been able to detect the algo name. No point to continue
+            return Err(EvaluationError::ImproperlyFormattedLine);
+        }
+        let mut algo =
+            detect_algo(&algo_name, length).map_err(|e| EvaluationError::ChecksumError(e))?;
+
+        let (filename_to_check_unescaped, prefix) = unescape_filename(filename_to_check);
+
+        #[cfg(unix)]
+        let real_filename_to_check = OsStr::from_bytes(&filename_to_check_unescaped);
+        #[cfg(not(unix))]
+        let real_filename_to_check =
+            &OsString::from(String::from_utf8(filename_to_check_unescaped).unwrap());
+
+        // manage the input file
+        let file_to_check =
+            match get_file_to_check(real_filename_to_check, opts.ignore_missing, &mut res) {
+                Some(file) => file,
+                None => return Ok(EvaluationStatus::Skipped),
+            };
+        let mut file_reader = BufReader::new(file_to_check);
+        // Read the file and calculate the checksum
+        let create_fn = &mut algo.create_fn;
+        let mut digest = create_fn();
+        let (calculated_checksum, _) =
+            digest_reader(&mut digest, &mut file_reader, opts.binary, algo.bits).unwrap();
+
+        // Do the checksum validation
+        if expected_checksum == calculated_checksum {
+            if !opts.quiet && !opts.status {
+                println!("{prefix}{filename_lossy}: OK");
+            }
+            return Ok(EvaluationStatus::ChecksumSuccess);
+        } else {
+            if !opts.status {
+                println!("{prefix}{filename_lossy}: FAILED");
+            }
+            return Ok(EvaluationStatus::ChecksumFail);
+        }
+    } else {
+        if line.is_empty() || line_bytes.starts_with(b"#") {
+            // Don't show any warning for empty or commented lines.
+            return Ok(EvaluationStatus::Skipped);
+        }
+        if opts.warn {
+            let algo = if let Some(algo_name_input) = algo_name_input {
+                algo_name_input.to_uppercase()
+            } else {
+                "Unknown algorithm".to_string()
+            };
+            eprintln!(
+                "{}: {}: {}: improperly formatted {} checksum line",
+                util_name(),
+                filename_input.maybe_quote(),
+                line_number + 1,
+                algo
+            );
+        }
+
+        return Err(EvaluationError::ImproperlyFormattedLine);
+    }
+}
+
 /***
  * Do the checksum validation (can be strict or not)
 */
@@ -495,7 +687,6 @@ where
     // if cksum has several input files, it will print the result for each file
     for filename_input in files {
         let mut correct_format = 0;
-        let mut properly_formatted = false;
         let mut res = ChecksumResult::default();
         let input_is_stdin = filename_input == OsStr::new("-");
 
@@ -541,6 +732,8 @@ where
         .collect::<Vec<_>>();
 
         let Some((chosen_regex, is_algo_based_format)) = determine_regex(&lines) else {
+            // If detecting the regex for the given file fails, print the
+            // "No properly formatted line" error and go to the next file.
             let e = ChecksumError::NoProperlyFormattedChecksumLinesFound {
                 filename: get_filename_for_output(filename_input, input_is_stdin),
             };
@@ -550,117 +743,37 @@ where
         };
 
         for (i, line) in lines.iter().enumerate() {
-            if let Some(caps) =
-                chosen_regex.captures(os_str_as_bytes(line).expect("UTF-8 decoding failure"))
-            {
-                properly_formatted = true;
-
-                let mut filename_to_check = caps.name("filename").unwrap().as_bytes();
-
-                if filename_to_check.starts_with(b"*")
-                    && i == 0
-                    && chosen_regex.as_str() == SINGLE_SPACE_REGEX
-                {
-                    // Remove the leading asterisk if present - only for the first line
-                    filename_to_check = &filename_to_check[1..];
-                }
-
-                let filename_lossy = String::from_utf8_lossy(filename_to_check);
-                let expected_checksum =
-                    get_expected_checksum(&filename_lossy, &caps, &chosen_regex)?;
-
-                // If the algo_name is provided, we use it, otherwise we try to detect it
-                let (algo_name, length) = if is_algo_based_format {
-                    identify_algo_name_and_length(
-                        &caps,
-                        algo_name_input,
-                        &mut res,
-                        &mut properly_formatted,
-                    )
-                    .unwrap_or((String::new(), None))
-                } else if let Some(a) = algo_name_input {
-                    // When a specific algorithm name is input, use it and use the provided bits
-                    // except when dealing with blake2b, where we will detect the length
-                    if algo_name_input == Some(ALGORITHM_OPTIONS_BLAKE2B) {
-                        // division by 2 converts the length of the Blake2b checksum from hexadecimal
-                        // characters to bytes, as each byte is represented by two hexadecimal characters.
-                        let length = Some(expected_checksum.len() / 2);
-                        (ALGORITHM_OPTIONS_BLAKE2B.to_string(), length)
-                    } else {
-                        (a.to_lowercase(), length_input)
-                    }
-                } else {
-                    // Default case if no algorithm is specified and non-algo based format is matched
-                    (String::new(), None)
-                };
-
-                if algo_name.is_empty() {
-                    // we haven't been able to detect the algo name. No point to continue
-                    properly_formatted = false;
-                    continue;
-                }
-                let mut algo = detect_algo(&algo_name, length)?;
-
-                let (filename_to_check_unescaped, prefix) = unescape_filename(filename_to_check);
-
-                #[cfg(unix)]
-                let real_filename_to_check = OsStr::from_bytes(&filename_to_check_unescaped);
-                #[cfg(not(unix))]
-                let real_filename_to_check =
-                    &OsString::from(String::from_utf8(filename_to_check_unescaped).unwrap());
-
-                // manage the input file
-                let file_to_check =
-                    match get_file_to_check(real_filename_to_check, ignore_missing, &mut res) {
-                        Some(file) => file,
-                        None => continue,
-                    };
-                let mut file_reader = BufReader::new(file_to_check);
-                // Read the file and calculate the checksum
-                let create_fn = &mut algo.create_fn;
-                let mut digest = create_fn();
-                let (calculated_checksum, _) =
-                    digest_reader(&mut digest, &mut file_reader, binary, algo.bits).unwrap();
-
-                // Do the checksum validation
-                if expected_checksum == calculated_checksum {
-                    if !quiet && !status {
-                        println!("{prefix}{filename_lossy}: OK");
-                    }
+            match process_line(
+                line,
+                i,
+                &chosen_regex,
+                algo_name_input,
+                length_input,
+                is_algo_based_format,
+                filename_input,
+                ChecksumOptions {
+                    warn,
+                    quiet,
+                    status,
+                    ignore_missing,
+                    binary,
+                },
+            ) {
+                Ok(EvaluationStatus::ChecksumSuccess) => {
                     correct_format += 1;
-                } else {
-                    if !status {
-                        println!("{prefix}{filename_lossy}: FAILED");
-                    }
+                }
+                Ok(EvaluationStatus::ChecksumFail) => {
                     res.failed_cksum += 1;
                 }
-            } else {
-                if line.is_empty() {
-                    // Don't show any warning for empty lines
-                    continue;
-                }
-                if warn {
-                    let algo = if let Some(algo_name_input) = algo_name_input {
-                        algo_name_input.to_uppercase()
-                    } else {
-                        "Unknown algorithm".to_string()
-                    };
-                    eprintln!(
-                        "{}: {}: {}: improperly formatted {} checksum line",
-                        util_name(),
-                        &filename_input.maybe_quote(),
-                        i + 1,
-                        algo
-                    );
-                }
-
-                res.bad_format += 1;
+                Ok(EvaluationStatus::Skipped) => (),
+                Err(EvaluationError::ImproperlyFormattedLine) => res.bad_format += 1,
+                Err(EvaluationError::ChecksumError(e)) => return Err(e),
             }
         }
 
         // not a single line correctly formatted found
         // return an error
-        if !properly_formatted {
+        if correct_format == 0 {
             if !status {
                 return Err(ChecksumError::NoProperlyFormattedChecksumLinesFound {
                     filename: get_filename_for_output(filename_input, input_is_stdin),
