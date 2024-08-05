@@ -138,13 +138,14 @@ struct ChecksumOptions {
 enum EvaluationStatus {
     ChecksumSuccess,
     ChecksumFail,
-    Skipped,
 }
 
 #[derive(Debug)]
 enum EvaluationError {
     ChecksumError(Box<dyn UError>),
+    CannotReadFile,
     ImproperlyFormattedLine,
+    Skipped,
 }
 
 /// Creates a SHA3 hasher instance based on the specified bits argument.
@@ -222,20 +223,33 @@ impl<'cli> ChecksumAlgoBuilder<'cli> {
         }
     }
 
-    pub fn algo_name(&mut self, algo: String) -> &mut Self {
-        self.algo = Some(algo);
+    pub fn algo_name(&mut self, algo: Option<String>) -> &mut Self {
+        self.algo = algo;
         self
     }
 
-    pub fn algo_length(&mut self, length: usize) -> &mut Self {
-        self.length = Some(length);
+    pub fn algo_length(&mut self, length: Option<usize>) -> &mut Self {
+        self.length = length;
         self
     }
 
-    pub fn try_build(self) -> UResult<HashAlgorithm> {
-        let Some(name) = self.algo else {
-            return Err(Box::new(ChecksumError::NeedAlgorithmToHash));
+    pub fn try_build(&self) -> Result<HashAlgorithm, EvaluationError> {
+        let Some(name) = self.algo.clone() else {
+            // No algo name was found.
+            return Err(EvaluationError::ChecksumError(Box::new(
+                ChecksumError::NeedAlgorithmToHash,
+            )));
         };
+        if self.cli_algo_argument.is_some_and(|cli| cli != name) {
+            // Provided algorithm conflicts with the algorithm given in CLI.
+            return Err(EvaluationError::ImproperlyFormattedLine);
+        }
+
+        if !SUPPORTED_ALGORITHMS.contains(&name.as_str()) {
+            // Not supported algo, leave early without failing.
+            return Err(EvaluationError::Skipped);
+        }
+
         match name.as_str() {
             ALGORITHM_OPTIONS_SYSV => Ok(HashAlgorithm {
                 name: ALGORITHM_OPTIONS_SYSV,
@@ -312,7 +326,8 @@ impl<'cli> ChecksumAlgoBuilder<'cli> {
             ALGORITHM_OPTIONS_SHAKE128 | "shake128sum" => {
                 let bits = self
                     .length
-                    .ok_or_else(|| USimpleError::new(1, "--bits required for SHAKE128"))?;
+                    .ok_or_else(|| USimpleError::new(1, "--bits required for SHAKE128"))
+                    .map_err(|e| EvaluationError::ChecksumError(e))?;
                 Ok(HashAlgorithm {
                     name: ALGORITHM_OPTIONS_SHAKE128,
                     create_fn: Box::new(|| Box::new(Shake128::new())),
@@ -322,7 +337,8 @@ impl<'cli> ChecksumAlgoBuilder<'cli> {
             ALGORITHM_OPTIONS_SHAKE256 | "shake256sum" => {
                 let bits = self
                     .length
-                    .ok_or_else(|| USimpleError::new(1, "--bits required for SHAKE256"))?;
+                    .ok_or_else(|| USimpleError::new(1, "--bits required for SHAKE256"))
+                    .map_err(|e| EvaluationError::ChecksumError(e))?;
                 Ok(HashAlgorithm {
                     name: ALGORITHM_OPTIONS_SHAKE256,
                     create_fn: Box::new(|| Box::new(Shake256::new())),
@@ -330,9 +346,13 @@ impl<'cli> ChecksumAlgoBuilder<'cli> {
                 })
             }
             //ALGORITHM_OPTIONS_SHA3 | "sha3" => (
-            _ if name.starts_with("sha3") => create_sha3(self.length),
+            _ if name.starts_with("sha3") => {
+                create_sha3(self.length).map_err(|e| EvaluationError::ChecksumError(e))
+            }
 
-            _ => Err(ChecksumError::UnknownAlgorithm.into()),
+            _ => Err(EvaluationError::ChecksumError(
+                ChecksumError::UnknownAlgorithm.into(),
+            )),
         }
     }
 }
@@ -433,22 +453,22 @@ fn get_expected_checksum(filename: &str, caps: &Captures, chosen_regex: &Regex) 
 fn get_file_to_check(
     filename: &OsStr,
     ignore_missing: bool,
-    res: &mut ChecksumResult,
-) -> Option<Box<dyn Read>> {
+) -> Result<Box<dyn Read>, EvaluationError> {
     let filename_lossy = String::from_utf8_lossy(os_str_as_bytes(filename).expect("UTF-8 error"));
+
     if filename == "-" {
-        Some(Box::new(stdin())) // Use stdin if "-" is specified in the checksum file
+        Ok(Box::new(stdin())) // Use stdin if "-" is specified in the checksum file
     } else {
         match File::open(filename) {
             Ok(f) => {
-                if f.metadata().ok()?.is_dir() {
+                if f.metadata().map_err(|_| EvaluationError::Skipped)?.is_dir() {
                     show!(USimpleError::new(
                         1,
                         format!("{}: Is a directory", filename_lossy)
                     ));
-                    None
+                    Err(EvaluationError::Skipped)
                 } else {
-                    Some(Box::new(f))
+                    Ok(Box::new(f))
                 }
             }
             Err(err) => {
@@ -457,9 +477,8 @@ fn get_file_to_check(
                     show!(err.map_err_context(|| filename_lossy.to_string()));
                     println!("{}: FAILED open or read", filename_lossy);
                 }
-                res.failed_open_file += 1;
                 // we could not open the file but we want to continue
-                None
+                Err(EvaluationError::CannotReadFile)
             }
         }
     }
@@ -487,53 +506,6 @@ fn get_input_file(filename: &OsStr) -> UResult<Box<dyn Read>> {
     }
 }
 
-/// Extracts the algorithm name and length from the regex captures if the algo-based format is matched.
-fn identify_algo_name_and_length(
-    caps: &Captures,
-    algo_name_input: Option<&str>,
-    res: &mut ChecksumResult,
-    properly_formatted: &mut bool,
-) -> Option<(String, Option<usize>)> {
-    // When the algo-based format is matched, extract details from regex captures
-    let algorithm = caps
-        .name("algo")
-        .map_or(String::new(), |m| {
-            // Unwrap is safe because the Regex checks UTF-8 validity
-            String::from_utf8(m.as_bytes().into()).unwrap()
-        })
-        .to_lowercase();
-
-    // check if we are called with XXXsum (example: md5sum) but we detected a different algo parsing the file
-    // (for example SHA1 (f) = d...)
-    // Also handle the case cksum -s sm3 but the file contains other formats
-    if algo_name_input.is_some() && algo_name_input != Some(&algorithm) {
-        res.bad_format += 1;
-        *properly_formatted = false;
-        return None;
-    }
-
-    if !SUPPORTED_ALGORITHMS.contains(&algorithm.as_str()) {
-        // Not supported algo, leave early
-        *properly_formatted = false;
-        return None;
-    }
-
-    let bits = caps.name("bits").map_or(Some(None), |m| {
-        let bits_value = String::from_utf8(m.as_bytes().into())
-            .unwrap()
-            .parse::<usize>()
-            .unwrap();
-        if bits_value % 8 == 0 {
-            Some(Some(bits_value / 8))
-        } else {
-            *properly_formatted = false;
-            None // Return None to signal a divisibility issue
-        }
-    })?;
-
-    Some((algorithm, bits))
-}
-
 fn process_line(
     line: &OsStr,
     line_number: usize,
@@ -546,8 +518,6 @@ fn process_line(
 ) -> Result<EvaluationStatus, EvaluationError> {
     let line_bytes = os_str_as_bytes(line).expect("UTF-8 decoding failure");
     if let Some(caps) = chosen_regex.captures(line_bytes) {
-        properly_formatted = true;
-
         let mut filename_to_check = caps.name("filename").unwrap().as_bytes();
 
         if filename_to_check.starts_with(b"*")
@@ -559,16 +529,21 @@ fn process_line(
         }
 
         let filename_lossy = String::from_utf8_lossy(filename_to_check);
-        let expected_checksum = get_expected_checksum(&filename_lossy, &caps, &chosen_regex)?;
+        let expected_checksum = get_expected_checksum(&filename_lossy, &caps, &chosen_regex)
+            .map_err(|e| EvaluationError::ChecksumError(e))?;
 
         let mut algo_builder = ChecksumAlgoBuilder::new(algo_name_input);
 
         // If the algo_name is provided, we use it, otherwise we try to detect it
-        let (algo_name, length) = if is_algo_based_format {
+        if is_algo_based_format {
             let regex_algo = caps
                 .name("algo")
                 // Unwrap is safe because the regex checked UTF-8 validity.
-                .map(|m| String::from_utf8(m.as_bytes().into()).unwrap());
+                .map(|m| {
+                    String::from_utf8(m.as_bytes().into())
+                        .unwrap()
+                        .to_lowercase()
+                });
 
             let regex_bits = caps.name("bits").map(|m| {
                 let bits = String::from_utf8(m.as_bytes().into())
@@ -584,30 +559,22 @@ fn process_line(
                 }
             });
 
-            identify_algo_name_and_length(&caps, algo_name_input, &mut res, &mut properly_formatted)
-                .unwrap_or((String::new(), None))
+            algo_builder.algo_name(regex_algo).algo_length(regex_bits);
         } else if let Some(a) = algo_name_input {
+            algo_builder.algo_name(Some(a.to_string()));
             // When a specific algorithm name is input, use it and use the provided bits
             // except when dealing with blake2b, where we will detect the length
             if algo_name_input == Some(ALGORITHM_OPTIONS_BLAKE2B) {
                 // division by 2 converts the length of the Blake2b checksum from hexadecimal
                 // characters to bytes, as each byte is represented by two hexadecimal characters.
                 let length = Some(expected_checksum.len() / 2);
-                (ALGORITHM_OPTIONS_BLAKE2B.to_string(), length)
+                algo_builder.algo_length(length);
             } else {
-                (a.to_lowercase(), length_input)
+                algo_builder.algo_length(length_input);
             }
-        } else {
-            // Default case if no algorithm is specified and non-algo based format is matched
-            (String::new(), None)
-        };
-
-        if algo_name.is_empty() {
-            // we haven't been able to detect the algo name. No point to continue
-            return Err(EvaluationError::ImproperlyFormattedLine);
         }
-        let mut algo =
-            detect_algo(&algo_name, length).map_err(|e| EvaluationError::ChecksumError(e))?;
+
+        let mut algo = algo_builder.try_build()?;
 
         let (filename_to_check_unescaped, prefix) = unescape_filename(filename_to_check);
 
@@ -618,11 +585,7 @@ fn process_line(
             &OsString::from(String::from_utf8(filename_to_check_unescaped).unwrap());
 
         // manage the input file
-        let file_to_check =
-            match get_file_to_check(real_filename_to_check, opts.ignore_missing, &mut res) {
-                Some(file) => file,
-                None => return Ok(EvaluationStatus::Skipped),
-            };
+        let file_to_check = get_file_to_check(real_filename_to_check, opts.ignore_missing)?;
         let mut file_reader = BufReader::new(file_to_check);
         // Read the file and calculate the checksum
         let create_fn = &mut algo.create_fn;
@@ -645,7 +608,7 @@ fn process_line(
     } else {
         if line.is_empty() || line_bytes.starts_with(b"#") {
             // Don't show any warning for empty or commented lines.
-            return Ok(EvaluationStatus::Skipped);
+            return Err(EvaluationError::Skipped);
         }
         if opts.warn {
             let algo = if let Some(algo_name_input) = algo_name_input {
@@ -765,8 +728,9 @@ where
                 Ok(EvaluationStatus::ChecksumFail) => {
                     res.failed_cksum += 1;
                 }
-                Ok(EvaluationStatus::Skipped) => (),
+                Err(EvaluationError::Skipped) => (),
                 Err(EvaluationError::ImproperlyFormattedLine) => res.bad_format += 1,
+                Err(EvaluationError::CannotReadFile) => res.failed_open_file += 1,
                 Err(EvaluationError::ChecksumError(e)) => return Err(e),
             }
         }
@@ -965,72 +929,97 @@ mod tests {
 
     #[test]
     fn test_detect_algo() {
+        let algo_with_name = |name: &str| {
+            ChecksumAlgoBuilder::new(None)
+                .algo_name(Some(name.to_string()))
+                .try_build()
+                .unwrap()
+        };
+        let algo_with_name_and_len = |name: &str, len| {
+            ChecksumAlgoBuilder::new(None)
+                .algo_name(Some(name.to_string()))
+                .algo_length(len)
+                .try_build()
+                .unwrap()
+        };
+
         assert_eq!(
-            detect_algo(ALGORITHM_OPTIONS_SYSV, None).unwrap().name,
+            algo_with_name(ALGORITHM_OPTIONS_SYSV).name,
             ALGORITHM_OPTIONS_SYSV
         );
         assert_eq!(
-            detect_algo(ALGORITHM_OPTIONS_BSD, None).unwrap().name,
+            algo_with_name(ALGORITHM_OPTIONS_BSD).name,
             ALGORITHM_OPTIONS_BSD
         );
         assert_eq!(
-            detect_algo(ALGORITHM_OPTIONS_CRC, None).unwrap().name,
+            algo_with_name(ALGORITHM_OPTIONS_CRC).name,
             ALGORITHM_OPTIONS_CRC
         );
         assert_eq!(
-            detect_algo(ALGORITHM_OPTIONS_MD5, None).unwrap().name,
+            algo_with_name(ALGORITHM_OPTIONS_MD5).name,
             ALGORITHM_OPTIONS_MD5
         );
         assert_eq!(
-            detect_algo(ALGORITHM_OPTIONS_SHA1, None).unwrap().name,
+            algo_with_name(ALGORITHM_OPTIONS_SHA1).name,
             ALGORITHM_OPTIONS_SHA1
         );
         assert_eq!(
-            detect_algo(ALGORITHM_OPTIONS_SHA224, None).unwrap().name,
+            algo_with_name(ALGORITHM_OPTIONS_SHA224).name,
             ALGORITHM_OPTIONS_SHA224
         );
         assert_eq!(
-            detect_algo(ALGORITHM_OPTIONS_SHA256, None).unwrap().name,
+            algo_with_name(ALGORITHM_OPTIONS_SHA256).name,
             ALGORITHM_OPTIONS_SHA256
         );
         assert_eq!(
-            detect_algo(ALGORITHM_OPTIONS_SHA384, None).unwrap().name,
+            algo_with_name(ALGORITHM_OPTIONS_SHA384).name,
             ALGORITHM_OPTIONS_SHA384
         );
         assert_eq!(
-            detect_algo(ALGORITHM_OPTIONS_SHA512, None).unwrap().name,
+            algo_with_name(ALGORITHM_OPTIONS_SHA512).name,
             ALGORITHM_OPTIONS_SHA512
         );
         assert_eq!(
-            detect_algo(ALGORITHM_OPTIONS_BLAKE2B, None).unwrap().name,
+            algo_with_name(ALGORITHM_OPTIONS_BLAKE2B).name,
             ALGORITHM_OPTIONS_BLAKE2B
         );
         assert_eq!(
-            detect_algo(ALGORITHM_OPTIONS_BLAKE3, None).unwrap().name,
+            algo_with_name(ALGORITHM_OPTIONS_BLAKE3).name,
             ALGORITHM_OPTIONS_BLAKE3
         );
         assert_eq!(
-            detect_algo(ALGORITHM_OPTIONS_SM3, None).unwrap().name,
+            algo_with_name(ALGORITHM_OPTIONS_SM3).name,
             ALGORITHM_OPTIONS_SM3
         );
         assert_eq!(
-            detect_algo(ALGORITHM_OPTIONS_SHAKE128, Some(128))
-                .unwrap()
-                .name,
+            algo_with_name_and_len(ALGORITHM_OPTIONS_SHAKE128, Some(128)).name,
             ALGORITHM_OPTIONS_SHAKE128
         );
         assert_eq!(
-            detect_algo(ALGORITHM_OPTIONS_SHAKE256, Some(256))
-                .unwrap()
-                .name,
+            algo_with_name_and_len(ALGORITHM_OPTIONS_SHAKE256, Some(256)).name,
             ALGORITHM_OPTIONS_SHAKE256
         );
-        assert_eq!(detect_algo("sha3_224", Some(224)).unwrap().name, "SHA3_224");
-        assert_eq!(detect_algo("sha3_256", Some(256)).unwrap().name, "SHA3_256");
-        assert_eq!(detect_algo("sha3_384", Some(384)).unwrap().name, "SHA3_384");
-        assert_eq!(detect_algo("sha3_512", Some(512)).unwrap().name, "SHA3_512");
+        assert_eq!(
+            algo_with_name_and_len("sha3_224", Some(224)).name,
+            "SHA3_224"
+        );
+        assert_eq!(
+            algo_with_name_and_len("sha3_256", Some(256)).name,
+            "SHA3_256"
+        );
+        assert_eq!(
+            algo_with_name_and_len("sha3_384", Some(384)).name,
+            "SHA3_384"
+        );
+        assert_eq!(
+            algo_with_name_and_len("sha3_512", Some(512)).name,
+            "SHA3_512"
+        );
 
-        assert!(detect_algo("sha3_512", None).is_err());
+        assert!(ChecksumAlgoBuilder::new(None)
+            .algo_name(Some("sha3_512".to_string()))
+            .try_build()
+            .is_err());
     }
 
     #[test]
