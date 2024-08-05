@@ -18,7 +18,6 @@ use std::num::ParseIntError;
 use std::path::Path;
 use uucore::checksum::calculate_blake2b_length;
 use uucore::checksum::create_sha3;
-use uucore::checksum::detect_algo;
 use uucore::checksum::digest_reader;
 use uucore::checksum::escape_filename;
 use uucore::checksum::perform_checksum_validation;

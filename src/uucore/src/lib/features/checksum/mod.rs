@@ -20,15 +20,15 @@ use std::{
 use crate::{
     error::{set_exit_code, FromIo, UError, UResult, USimpleError},
     os_str_as_bytes, show, show_error, show_warning_caps,
-    sum::{
-        Blake2b, Blake3, Digest, DigestWriter, Md5, Sha1, Sha224, Sha256, Sha384, Sha3_224,
-        Sha3_256, Sha3_384, Sha3_512, Sha512, Shake128, Shake256, Sm3, BSD, CRC, SYSV,
-    },
+    sum::{Digest, DigestWriter},
     util_name,
 };
 use std::io::stdin;
 use std::io::BufRead;
 use thiserror::Error;
+
+mod algo;
+pub use algo::ChecksumAlgoBuilder;
 
 pub const ALGORITHM_OPTIONS_SYSV: &str = "sysv";
 pub const ALGORITHM_OPTIONS_BSD: &str = "bsd";
@@ -141,46 +141,11 @@ enum EvaluationStatus {
 }
 
 #[derive(Debug)]
-enum EvaluationError {
+pub enum EvaluationError {
     ChecksumError(Box<dyn UError>),
     CannotReadFile,
     ImproperlyFormattedLine,
     Skipped,
-}
-
-/// Creates a SHA3 hasher instance based on the specified bits argument.
-///
-/// # Returns
-///
-/// Returns a UResult of a tuple containing the algorithm name, the hasher instance, and
-/// the output length in bits or an Err if an unsupported output size is provided, or if
-/// the `--bits` flag is missing.
-pub fn create_sha3(bits: Option<usize>) -> UResult<HashAlgorithm> {
-    match bits {
-        Some(224) => Ok(HashAlgorithm {
-            name: "SHA3_224",
-            create_fn: Box::new(|| Box::new(Sha3_224::new())),
-            bits: 224,
-        }),
-        Some(256) => Ok(HashAlgorithm {
-            name: "SHA3_256",
-            create_fn: Box::new(|| Box::new(Sha3_256::new())),
-            bits: 256,
-        }),
-        Some(384) => Ok(HashAlgorithm {
-            name: "SHA3_384",
-            create_fn: Box::new(|| Box::new(Sha3_384::new())),
-            bits: 384,
-        }),
-        Some(512) => Ok(HashAlgorithm {
-            name: "SHA3_512",
-            create_fn: Box::new(|| Box::new(Sha3_512::new())),
-            bits: 512,
-        }),
-
-        Some(_) => Err(ChecksumError::InvalidOutputSizeForSha3.into()),
-        None => Err(ChecksumError::BitsRequiredForSha3.into()),
-    }
 }
 
 #[allow(clippy::comparison_chain)]
@@ -203,156 +168,6 @@ fn cksum_output(res: &ChecksumResult, ignore_missing: bool, status: bool) {
             show_warning_caps!("{} listed file could not be read", res.failed_open_file);
         } else if res.failed_open_file > 1 {
             show_warning_caps!("{} listed files could not be read", res.failed_open_file);
-        }
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct ChecksumAlgoBuilder<'cli> {
-    /// The name of the CLI `--algo` if provided
-    cli_algo_argument: Option<&'cli str>,
-    algo: Option<String>,
-    length: Option<usize>,
-}
-
-impl<'cli> ChecksumAlgoBuilder<'cli> {
-    pub fn new(cli_algo: Option<&'cli str>) -> Self {
-        Self {
-            cli_algo_argument: cli_algo,
-            ..Default::default()
-        }
-    }
-
-    pub fn algo_name(&mut self, algo: Option<String>) -> &mut Self {
-        self.algo = algo;
-        self
-    }
-
-    pub fn algo_length(&mut self, length: Option<usize>) -> &mut Self {
-        self.length = length;
-        self
-    }
-
-    pub fn try_build(&self) -> Result<HashAlgorithm, EvaluationError> {
-        let Some(name) = self.algo.clone() else {
-            // No algo name was found.
-            return Err(EvaluationError::ChecksumError(Box::new(
-                ChecksumError::NeedAlgorithmToHash,
-            )));
-        };
-        if self.cli_algo_argument.is_some_and(|cli| cli != name) {
-            // Provided algorithm conflicts with the algorithm given in CLI.
-            return Err(EvaluationError::ImproperlyFormattedLine);
-        }
-
-        if !SUPPORTED_ALGORITHMS.contains(&name.as_str()) {
-            // Not supported algo, leave early without failing.
-            return Err(EvaluationError::Skipped);
-        }
-
-        match name.as_str() {
-            ALGORITHM_OPTIONS_SYSV => Ok(HashAlgorithm {
-                name: ALGORITHM_OPTIONS_SYSV,
-                create_fn: Box::new(|| Box::new(SYSV::new())),
-                bits: 512,
-            }),
-            ALGORITHM_OPTIONS_BSD => Ok(HashAlgorithm {
-                name: ALGORITHM_OPTIONS_BSD,
-                create_fn: Box::new(|| Box::new(BSD::new())),
-                bits: 1024,
-            }),
-            ALGORITHM_OPTIONS_CRC => Ok(HashAlgorithm {
-                name: ALGORITHM_OPTIONS_CRC,
-                create_fn: Box::new(|| Box::new(CRC::new())),
-                bits: 256,
-            }),
-            ALGORITHM_OPTIONS_MD5 | "md5sum" => Ok(HashAlgorithm {
-                name: ALGORITHM_OPTIONS_MD5,
-                create_fn: Box::new(|| Box::new(Md5::new())),
-                bits: 128,
-            }),
-            ALGORITHM_OPTIONS_SHA1 | "sha1sum" => Ok(HashAlgorithm {
-                name: ALGORITHM_OPTIONS_SHA1,
-                create_fn: Box::new(|| Box::new(Sha1::new())),
-                bits: 160,
-            }),
-            ALGORITHM_OPTIONS_SHA224 | "sha224sum" => Ok(HashAlgorithm {
-                name: ALGORITHM_OPTIONS_SHA224,
-                create_fn: Box::new(|| Box::new(Sha224::new())),
-                bits: 224,
-            }),
-            ALGORITHM_OPTIONS_SHA256 | "sha256sum" => Ok(HashAlgorithm {
-                name: ALGORITHM_OPTIONS_SHA256,
-                create_fn: Box::new(|| Box::new(Sha256::new())),
-                bits: 256,
-            }),
-            ALGORITHM_OPTIONS_SHA384 | "sha384sum" => Ok(HashAlgorithm {
-                name: ALGORITHM_OPTIONS_SHA384,
-                create_fn: Box::new(|| Box::new(Sha384::new())),
-                bits: 384,
-            }),
-            ALGORITHM_OPTIONS_SHA512 | "sha512sum" => Ok(HashAlgorithm {
-                name: ALGORITHM_OPTIONS_SHA512,
-                create_fn: Box::new(|| Box::new(Sha512::new())),
-                bits: 512,
-            }),
-            ALGORITHM_OPTIONS_BLAKE2B | "b2sum" => {
-                // Set default length to 512 if None
-                let bits = self.length.unwrap_or(512);
-                if bits == 512 {
-                    Ok(HashAlgorithm {
-                        name: ALGORITHM_OPTIONS_BLAKE2B,
-                        create_fn: Box::new(move || Box::new(Blake2b::new())),
-                        bits: 512,
-                    })
-                } else {
-                    Ok(HashAlgorithm {
-                        name: ALGORITHM_OPTIONS_BLAKE2B,
-                        create_fn: Box::new(move || Box::new(Blake2b::with_output_bytes(bits))),
-                        bits,
-                    })
-                }
-            }
-            ALGORITHM_OPTIONS_BLAKE3 | "b3sum" => Ok(HashAlgorithm {
-                name: ALGORITHM_OPTIONS_BLAKE3,
-                create_fn: Box::new(|| Box::new(Blake3::new())),
-                bits: 256,
-            }),
-            ALGORITHM_OPTIONS_SM3 => Ok(HashAlgorithm {
-                name: ALGORITHM_OPTIONS_SM3,
-                create_fn: Box::new(|| Box::new(Sm3::new())),
-                bits: 512,
-            }),
-            ALGORITHM_OPTIONS_SHAKE128 | "shake128sum" => {
-                let bits = self
-                    .length
-                    .ok_or_else(|| USimpleError::new(1, "--bits required for SHAKE128"))
-                    .map_err(|e| EvaluationError::ChecksumError(e))?;
-                Ok(HashAlgorithm {
-                    name: ALGORITHM_OPTIONS_SHAKE128,
-                    create_fn: Box::new(|| Box::new(Shake128::new())),
-                    bits,
-                })
-            }
-            ALGORITHM_OPTIONS_SHAKE256 | "shake256sum" => {
-                let bits = self
-                    .length
-                    .ok_or_else(|| USimpleError::new(1, "--bits required for SHAKE256"))
-                    .map_err(|e| EvaluationError::ChecksumError(e))?;
-                Ok(HashAlgorithm {
-                    name: ALGORITHM_OPTIONS_SHAKE256,
-                    create_fn: Box::new(|| Box::new(Shake256::new())),
-                    bits,
-                })
-            }
-            //ALGORITHM_OPTIONS_SHA3 | "sha3" => (
-            _ if name.starts_with("sha3") => {
-                create_sha3(self.length).map_err(|e| EvaluationError::ChecksumError(e))
-            }
-
-            _ => Err(EvaluationError::ChecksumError(
-                ChecksumError::UnknownAlgorithm.into(),
-            )),
         }
     }
 }
@@ -532,7 +347,7 @@ fn process_line(
         let expected_checksum = get_expected_checksum(&filename_lossy, &caps, &chosen_regex)
             .map_err(|e| EvaluationError::ChecksumError(e))?;
 
-        let mut algo_builder = ChecksumAlgoBuilder::new(algo_name_input);
+        let mut algo_builder = ChecksumAlgoBuilder::new().maybe_cli_algo_name(algo_name_input);
 
         // If the algo_name is provided, we use it, otherwise we try to detect it
         if is_algo_based_format {
@@ -559,18 +374,20 @@ fn process_line(
                 }
             });
 
-            algo_builder.algo_name(regex_algo).algo_length(regex_bits);
+            algo_builder = algo_builder
+                .maybe_algo_name(regex_algo)
+                .maybe_algo_length(regex_bits);
         } else if let Some(a) = algo_name_input {
-            algo_builder.algo_name(Some(a.to_string()));
+            algo_builder = algo_builder.algo_name(a.to_string());
             // When a specific algorithm name is input, use it and use the provided bits
             // except when dealing with blake2b, where we will detect the length
             if algo_name_input == Some(ALGORITHM_OPTIONS_BLAKE2B) {
                 // division by 2 converts the length of the Blake2b checksum from hexadecimal
                 // characters to bytes, as each byte is represented by two hexadecimal characters.
-                let length = Some(expected_checksum.len() / 2);
-                algo_builder.algo_length(length);
+                let length = expected_checksum.len() / 2;
+                algo_builder = algo_builder.algo_length(length);
             } else {
-                algo_builder.algo_length(length_input);
+                algo_builder = algo_builder.maybe_algo_length(length_input);
             }
         }
 
@@ -930,15 +747,15 @@ mod tests {
     #[test]
     fn test_detect_algo() {
         let algo_with_name = |name: &str| {
-            ChecksumAlgoBuilder::new(None)
-                .algo_name(Some(name.to_string()))
+            ChecksumAlgoBuilder::new()
+                .algo_name(name)
                 .try_build()
                 .unwrap()
         };
         let algo_with_name_and_len = |name: &str, len| {
-            ChecksumAlgoBuilder::new(None)
-                .algo_name(Some(name.to_string()))
-                .algo_length(len)
+            ChecksumAlgoBuilder::new()
+                .algo_name(name)
+                .maybe_algo_length(len)
                 .try_build()
                 .unwrap()
         };
@@ -1016,8 +833,8 @@ mod tests {
             "SHA3_512"
         );
 
-        assert!(ChecksumAlgoBuilder::new(None)
-            .algo_name(Some("sha3_512".to_string()))
+        assert!(ChecksumAlgoBuilder::new()
+            .algo_name("sha3_512")
             .try_build()
             .is_err());
     }
