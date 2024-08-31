@@ -20,7 +20,6 @@ use std::{
 use utils::{cksum_output, get_filename_for_output, unescape_filename};
 
 use crate::{
-    bytes_trim_ascii,
     error::{set_exit_code, FromIo, UError, UResult, USimpleError},
     os_str_as_bytes, read_os_string_lines, show, show_error,
     sum::{Digest, DigestWriter},
@@ -193,9 +192,7 @@ fn determine_regex<S: AsRef<OsStr>>(lines: &[S]) -> Option<(Regex, bool)> {
     ];
 
     for line in lines {
-        let mut line_trim = os_str_as_bytes(line.as_ref()).expect("UTF-8 decoding failed");
-        // FIXME: Replace this with `.trim_ascii()` when MSRV is 1.80
-        line_trim = bytes_trim_ascii(line_trim);
+        let line_trim = os_str_as_bytes(line.as_ref()).expect("UTF-8 decoding failed");
 
         for (regex, is_algo_based) in &regexes {
             if regex.is_match(line_trim) {
