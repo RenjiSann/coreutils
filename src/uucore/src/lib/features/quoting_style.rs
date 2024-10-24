@@ -9,6 +9,8 @@ use std::char::from_digit;
 use std::ffi::OsStr;
 use std::fmt;
 
+use crate::os_str_as_bytes;
+
 // These are characters with special meaning in the shell (e.g. bash).
 // The first const contains characters that only have a special meaning when they appear at the beginning of a name.
 const SPECIAL_SHELL_CHARS_START: &[char] = &['~', '#'];
@@ -73,7 +75,7 @@ enum EscapeState {
 }
 
 struct EscapeOctal {
-    c: char,
+    c: u32,
     state: EscapeOctalState,
     idx: usize,
 }
@@ -95,7 +97,7 @@ impl Iterator for EscapeOctal {
                 Some('\\')
             }
             EscapeOctalState::Value => {
-                let octal_digit = ((self.c as u32) >> (self.idx * 3)) & 0o7;
+                let octal_digit = ((self.c) >> (self.idx * 3)) & 0o7;
                 if self.idx == 0 {
                     self.state = EscapeOctalState::Done;
                 } else {
@@ -108,9 +110,17 @@ impl Iterator for EscapeOctal {
 }
 
 impl EscapeOctal {
-    fn from(c: char) -> Self {
+    fn from_char(c: char) -> Self {
         Self {
-            c,
+            c: c as u32,
+            idx: 2,
+            state: EscapeOctalState::Backslash,
+        }
+    }
+
+    fn from_byte(c: u8) -> Self {
+        Self {
+            c: c as u32,
             idx: 2,
             state: EscapeOctalState::Backslash,
         }
@@ -148,7 +158,7 @@ impl EscapedChar {
                 _ => Char(' '),
             },
             ':' if dirname => Backslash(':'),
-            _ if c.is_ascii_control() => Octal(EscapeOctal::from(c)),
+            _ if c.is_ascii_control() => Octal(EscapeOctal::from_char(c)),
             _ => Char(c),
         };
         Self { state: init_state }
@@ -165,13 +175,22 @@ impl EscapedChar {
             '\x0B' => Backslash('v'),
             '\x0C' => Backslash('f'),
             '\r' => Backslash('r'),
-            '\x00'..='\x1F' | '\x7F' => Octal(EscapeOctal::from(c)),
+            '\x00'..='\x1F' | '\x7F' => Octal(EscapeOctal::from_char(c)),
             '\'' => match quotes {
                 Quotes::Single => Backslash('\''),
                 _ => Char('\''),
             },
             _ if SPECIAL_SHELL_CHARS.contains(c) => ForceQuote(c),
             _ => Char(c),
+        };
+        Self { state: init_state }
+    }
+
+    fn new_byte(b: u8, escape: bool) -> Self {
+        let init_state = if escape {
+            EscapeState::Octal(EscapeOctal::from_byte(b))
+        } else {
+            EscapeState::Char('?')
         };
         Self { state: init_state }
     }
@@ -205,18 +224,92 @@ impl Iterator for EscapedChar {
     }
 }
 
-fn shell_without_escape(name: &str, quotes: Quotes, show_control_chars: bool) -> (String, bool) {
-    let mut must_quote = false;
-    let mut escaped_str = String::with_capacity(name.len());
+enum NonUtf8StringPart<'a> {
+    Valid(&'a str),
+    Invalid(&'a [u8]),
+}
 
-    for c in name.chars() {
-        let escaped = {
-            let ec = EscapedChar::new_shell(c, false, quotes);
-            if show_control_chars {
-                ec
+impl<'a> NonUtf8StringPart<'a> {
+    fn valid(&self) -> Option<&'a str> {
+        match self {
+            NonUtf8StringPart::Valid(s) => Some(s),
+            NonUtf8StringPart::Invalid(_) => None,
+        }
+    }
+}
+
+/// Represent a string which might contains non UTF-8 characters.
+struct MaybeNonUtf8String<'a> {
+    source: Vec<NonUtf8StringPart<'a>>,
+}
+
+impl<'a> MaybeNonUtf8String<'a> {
+    fn new(source: &'a [u8]) -> Self {
+        Self {
+            source: source
+                .utf8_chunks()
+                .flat_map(|chunk| {
+                    let mut parts = vec![];
+                    if !chunk.valid().is_empty() {
+                        parts.push(NonUtf8StringPart::Valid(chunk.valid()));
+                    }
+                    if !chunk.invalid().is_empty() {
+                        parts.push(NonUtf8StringPart::Invalid(chunk.invalid()));
+                    }
+                    parts
+                })
+                .collect(),
+        }
+    }
+
+    fn contains_chars(&self, s: &[char]) -> bool {
+        self.source
+            .iter()
+            .any(|chunk| chunk.valid().is_some_and(|valid| valid.contains(s)))
+    }
+
+    fn contains_char(&self, c: char) -> bool {
+        self.source
+            .iter()
+            .any(|chunk| chunk.valid().is_some_and(|valid| valid.contains(c)))
+    }
+
+    fn starts_with(&self, chars: &[char]) -> bool {
+        self.source.first().is_some_and(|chunk| {
+            if let NonUtf8StringPart::Valid(s) = chunk {
+                s.starts_with(chars)
             } else {
-                ec.hide_control()
+                false
             }
+        })
+    }
+
+    fn estimated_len(&self) -> usize {
+        self.source.iter().fold(0, |i, chunk| match chunk {
+            NonUtf8StringPart::Valid(s) => i + s.len(),
+            NonUtf8StringPart::Invalid(b) => i + b.len(),
+        })
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &NonUtf8StringPart<'a>> {
+        self.source.iter()
+    }
+}
+
+fn shell_without_escape(
+    name: &MaybeNonUtf8String<'_>,
+    quotes: Quotes,
+    show_control_chars: bool,
+) -> (String, bool) {
+    let mut must_quote = false;
+    let mut escaped_str = String::with_capacity(name.estimated_len());
+    let chunks = name.iter();
+
+    let mut push_to_str = |ec: EscapedChar| {
+        let escaped = if show_control_chars {
+            ec
+        } else {
+            ec.hide_control()
         };
 
         match escaped.state {
@@ -231,53 +324,85 @@ fn shell_without_escape(name: &str, quotes: Quotes, show_control_chars: bool) ->
                 }
             }
         }
+    };
+
+    for chunk in chunks {
+        match chunk {
+            NonUtf8StringPart::Valid(s) => {
+                for c in s.chars() {
+                    let escaped = EscapedChar::new_shell(c, false, quotes);
+                    push_to_str(escaped)
+                }
+            }
+            NonUtf8StringPart::Invalid(bytes) => {
+                for b in *bytes {
+                    let escaped = EscapedChar::new_byte(*b, false);
+                    push_to_str(escaped)
+                }
+            }
+        }
     }
 
     must_quote = must_quote || name.starts_with(SPECIAL_SHELL_CHARS_START);
     (escaped_str, must_quote)
 }
 
-fn shell_with_escape(name: &str, quotes: Quotes) -> (String, bool) {
+fn shell_with_escape(name: &MaybeNonUtf8String<'_>, quotes: Quotes) -> (String, bool) {
     // We need to keep track of whether we are in a dollar expression
     // because e.g. \b\n is escaped as $'\b\n' and not like $'b'$'n'
     let mut in_dollar = false;
     let mut must_quote = false;
-    let mut escaped_str = String::with_capacity(name.len());
+    let mut escaped_str = String::with_capacity(name.estimated_len());
+    let chunks = name.iter();
 
-    for c in name.chars() {
-        let escaped = EscapedChar::new_shell(c, true, quotes);
-        match escaped.state {
-            EscapeState::Char(x) => {
-                if in_dollar {
-                    escaped_str.push_str("''");
-                    in_dollar = false;
-                }
-                escaped_str.push(x);
-            }
-            EscapeState::ForceQuote(x) => {
-                if in_dollar {
-                    escaped_str.push_str("''");
-                    in_dollar = false;
-                }
-                must_quote = true;
-                escaped_str.push(x);
-            }
-            // Single quotes are not put in dollar expressions, but are escaped
-            // if the string also contains double quotes. In that case, they must
-            // be handled separately.
-            EscapeState::Backslash('\'') => {
-                must_quote = true;
+    let mut push_to_string = |escaped: EscapedChar| match escaped.state {
+        EscapeState::Char(x) => {
+            if in_dollar {
+                escaped_str.push_str("''");
                 in_dollar = false;
-                escaped_str.push_str("'\\''");
             }
-            _ => {
-                if !in_dollar {
-                    escaped_str.push_str("'$'");
-                    in_dollar = true;
+            escaped_str.push(x);
+        }
+        EscapeState::ForceQuote(x) => {
+            if in_dollar {
+                escaped_str.push_str("''");
+                in_dollar = false;
+            }
+            must_quote = true;
+            escaped_str.push(x);
+        }
+        // Single quotes are not put in dollar expressions, but are escaped
+        // if the string also contains double quotes. In that case, they must
+        // be handled separately.
+        EscapeState::Backslash('\'') => {
+            must_quote = true;
+            in_dollar = false;
+            escaped_str.push_str("'\\''");
+        }
+        _ => {
+            if !in_dollar {
+                escaped_str.push_str("'$'");
+                in_dollar = true;
+            }
+            must_quote = true;
+            for char in escaped {
+                escaped_str.push(char);
+            }
+        }
+    };
+
+    for chunk in chunks {
+        match chunk {
+            NonUtf8StringPart::Valid(s) => {
+                for c in s.chars() {
+                    let escaped = EscapedChar::new_shell(c, true, quotes);
+                    push_to_string(escaped)
                 }
-                must_quote = true;
-                for char in escaped {
-                    escaped_str.push(char);
+            }
+            NonUtf8StringPart::Invalid(bytes) => {
+                for b in *bytes {
+                    let escaped = EscapedChar::new_byte(*b, true);
+                    push_to_string(escaped)
                 }
             }
         }
@@ -309,6 +434,12 @@ fn shell_escaped_char_set(is_dirname: bool) -> &'static [char] {
 /// This inner function provides an additional flag `dirname` which
 /// is meant for ls' directory name display.
 fn escape_name_inner(name: &OsStr, style: &QuotingStyle, dirname: bool) -> String {
+    // utf8_chunks separates good from bad UTF8 in a byte sequence.
+    let name_bytes = os_str_as_bytes(name)
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|_| name.to_string_lossy().as_bytes().to_vec());
+    let name_chunks = MaybeNonUtf8String::new(&name_bytes);
+
     match style {
         QuotingStyle::Literal { show_control } => {
             if *show_control {
@@ -321,10 +452,21 @@ fn escape_name_inner(name: &OsStr, style: &QuotingStyle, dirname: bool) -> Strin
             }
         }
         QuotingStyle::C { quotes } => {
-            let escaped_str: String = name
-                .to_string_lossy()
-                .chars()
-                .flat_map(|c| EscapedChar::new_c(c, *quotes, dirname))
+            let escaped_str: String = name_chunks
+                .iter()
+                .flat_map(|chunk| {
+                    let x: Box<dyn Iterator<Item = char>> = match chunk {
+                        NonUtf8StringPart::Valid(s) => Box::new(
+                            s.chars()
+                                .flat_map(|c| EscapedChar::new_c(c, *quotes, dirname)),
+                        ),
+                        NonUtf8StringPart::Invalid(bytes) => {
+                            Box::new(bytes.iter().flat_map(|b| EscapedChar::new_byte(*b, true)))
+                        }
+                    };
+
+                    x
+                })
                 .collect();
 
             match quotes {
@@ -338,11 +480,11 @@ fn escape_name_inner(name: &OsStr, style: &QuotingStyle, dirname: bool) -> Strin
             always_quote,
             show_control,
         } => {
-            let name = name.to_string_lossy();
+            let escaped_char_set = shell_escaped_char_set(dirname);
 
-            let (quotes, must_quote) = if name.contains(shell_escaped_char_set(dirname)) {
+            let (quotes, must_quote) = if name_chunks.contains_chars(escaped_char_set) {
                 (Quotes::Single, true)
-            } else if name.contains('\'') {
+            } else if name_chunks.contains_char('\'') {
                 (Quotes::Double, true)
             } else if *always_quote {
                 (Quotes::Single, true)
@@ -351,9 +493,9 @@ fn escape_name_inner(name: &OsStr, style: &QuotingStyle, dirname: bool) -> Strin
             };
 
             let (escaped_str, contains_quote_chars) = if *escape {
-                shell_with_escape(&name, quotes)
+                shell_with_escape(&name_chunks, quotes)
             } else {
-                shell_without_escape(&name, quotes, *show_control)
+                shell_without_escape(&name_chunks, quotes, *show_control)
             };
 
             match (must_quote | contains_quote_chars, quotes) {
