@@ -7,21 +7,23 @@
 
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take},
-    character::complete::{digit1, one_of},
+    bytes::complete::{tag, take, take_while1},
+    character::complete::digit1,
     combinator::{map, map_opt, peek, recognize, value},
-    multi::{many0, many_m_n},
+    multi::many0,
     sequence::{delimited, preceded, separated_pair},
-    IResult,
+    AsChar, IResult,
 };
 use std::{
+    cell::RefCell,
+    char,
     collections::{HashMap, HashSet},
     error::Error,
     fmt::{Debug, Display},
     io::{BufRead, Write},
     ops::Not,
 };
-use uucore::error::UError;
+use uucore::{error::UError, show_warning};
 
 use crate::unicode_table;
 
@@ -285,9 +287,49 @@ impl Sequence {
     }
 
     fn parse_octal(input: &[u8]) -> IResult<&[u8], u8> {
+        let bytes = RefCell::new(vec![]);
+        eprintln!("parse_octal");
+
         map_opt(
-            preceded(tag("\\"), recognize(many_m_n(1, 3, one_of("01234567")))),
-            |out: &[u8]| u8::from_str_radix(std::str::from_utf8(out).expect("boop"), 8).ok(),
+            preceded(
+                tag("\\"),
+                recognize(take_while1(move |byte: u8| {
+                    if !byte.is_oct_digit() {
+                        return false;
+                    }
+
+                    let mut mut_bytes = bytes.borrow_mut();
+                    let try_byte_from_octal =
+                        |arr| u8::from_str_radix(std::str::from_utf8(arr).ok()?, 8).ok();
+
+                    // return false if length is 3, as escaped octal sequence
+                    // shouldn't span over 3 digits
+                    if mut_bytes.len() == 3 {
+                        return false;
+                    }
+
+                    // Otherwise, try to push another byte and check if
+                    // it is still a valid ASCII number
+                    mut_bytes.push(byte);
+
+                    if try_byte_from_octal(&mut_bytes[..]).is_none() {
+                        // All unwraps are ok, all bytes are digit characters.
+                        let full_str = std::str::from_utf8(&mut_bytes).unwrap();
+                        let octal = std::str::from_utf8(&mut_bytes[..2]).unwrap();
+                        let c = char::from_u32(byte as u32).unwrap();
+                        //eprintln!("BACKTRACE: {}", std::backtrace::Backtrace::force_capture());
+                        show_warning!(
+                            "the ambiguous octal escape \\{full_str} is being\n\
+                            \tinterpreted as the 2-byte sequence \\{octal:0>3}, {c}"
+                        );
+
+                        false
+                    } else {
+                        true
+                    }
+                })),
+            ),
+            |arr| u8::from_str_radix(std::str::from_utf8(arr).ok()?, 8).ok(),
         )(input)
     }
 
