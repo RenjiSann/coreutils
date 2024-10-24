@@ -2201,16 +2201,18 @@ fn test_ls_recursive_1() {
 /// quoting and escaping special characters with different quoting styles.
 #[cfg(unix)]
 mod quoting {
+    use std::{ffi::OsStr, io::Write, os::unix::ffi::OsStrExt};
+
     use super::TestScenario;
 
     /// Create a directory with "dirname", then for each check, assert that the
     /// output is correct.
     fn check_quoting_dirname(dirname: &str, checks: &[(&str, &str, &str)], extra_args: &[&str]) {
-        for (qt_style, regular_mode, dir_mode) in checks {
-            let scene = TestScenario::new(util_name!());
-            let at = &scene.fixtures;
-            at.mkdir(dirname);
+        let scene = TestScenario::new(util_name!());
+        let at = &scene.fixtures;
+        at.mkdir(dirname);
 
+        for (qt_style, regular_mode, dir_mode) in checks {
             let expected = format!(
                 "{}:\n{}\n\n{}:\n",
                 match *qt_style {
@@ -2228,7 +2230,8 @@ mod quoting {
                 .arg(format!("--quoting-style={qt_style}"))
                 .args(extra_args)
                 .succeeds()
-                .stdout_is(expected);
+                .stdout_is(expected)
+                .no_stderr();
         }
     }
 
@@ -2652,6 +2655,100 @@ mod quoting {
             ],
             &[],
         );
+    }
+
+    #[test]
+    fn test_ls_quoting_utf8_heart() {
+        check_quoting_dirname(
+            "\u{2764}\u{fe0f}-heart",
+            &[
+                (
+                    "literal",
+                    "\u{2764}\u{fe0f}-heart",
+                    "./\u{2764}\u{fe0f}-heart",
+                ),
+                (
+                    "shell",
+                    "\u{2764}\u{fe0f}-heart",
+                    "./\u{2764}\u{fe0f}-heart",
+                ),
+                (
+                    "shell-always",
+                    "'\u{2764}\u{fe0f}-heart'",
+                    "'./\u{2764}\u{fe0f}-heart'",
+                ),
+                (
+                    "shell-escape",
+                    "\u{2764}\u{fe0f}-heart",
+                    "./\u{2764}\u{fe0f}-heart",
+                ),
+                (
+                    "shell-escape-always",
+                    "'\u{2764}\u{fe0f}-heart'",
+                    "'./\u{2764}\u{fe0f}-heart'",
+                ),
+                (
+                    "c",
+                    "\"\u{2764}\u{fe0f}-heart\"",
+                    "\"./\u{2764}\u{fe0f}-heart\"",
+                ),
+                (
+                    "escape",
+                    "\u{2764}\u{fe0f}-heart",
+                    "./\u{2764}\u{fe0f}-heart",
+                ),
+            ],
+            &[],
+        );
+    }
+
+    #[test]
+    fn test_ls_quoting_non_utf8() {
+        let filename = OsStr::from_bytes(b"\xff-FF");
+        let checks: &[(&str, &[u8], &[u8])] = &[
+            ("shell", b"?-FF", b"./?-FF"),
+            ("shell-always", b"'?-FF'", b"'./?-FF'"),
+            ("shell-escape", b"''$'\\377''-FF'", b"'./'$'\\377''-FF'"),
+            (
+                "shell-escape-always",
+                b"''$'\\377''-FF'",
+                b"'./'$'\\377''-FF'",
+            ),
+            ("c", b"\"\\377-FF\"", b"\"./\\377-FF\""),
+            ("escape", b"\\377-FF", b"./\\377-FF"),
+            // FIXME: Literal quoting style does not work yet with non-utf-8
+            // ("literal", b"\xff-FF", b"./\xff-FF"),
+        ];
+
+        let scene = TestScenario::new(util_name!());
+        let at = &scene.fixtures;
+        at.mkdir(filename);
+
+        for (qt_style, regular_mode, dir_mode) in checks {
+            let mut expected = vec![];
+            writeln!(
+                expected,
+                "{}:",
+                match *qt_style {
+                    "shell-always" | "shell-escape-always" => "'.'",
+                    "c" => "\".\"",
+                    _ => ".",
+                },
+            )
+            .unwrap();
+            expected.write_all(regular_mode).unwrap();
+            expected.write_all(b"\n\n").unwrap();
+            expected.write_all(dir_mode).unwrap();
+            expected.write_all(b":\n").unwrap();
+
+            scene
+                .ucmd()
+                .arg("-R")
+                .arg(format!("--quoting-style={qt_style}"))
+                .succeeds()
+                .stdout_is_bytes(expected)
+                .no_stderr();
+        }
     }
 }
 
