@@ -1476,6 +1476,7 @@ mod check_utf8 {
             .arg(at.subdir.join("check"))
             .fails()
             .stdout_is_bytes(b"flakey\xffname: FAILED open or read\n")
+            .stderr_contains("'flakey'$'\\377''name': No such file or directory")
             .stderr_contains("1 listed file could not be read");
     }
 }
