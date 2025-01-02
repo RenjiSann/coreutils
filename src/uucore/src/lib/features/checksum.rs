@@ -21,6 +21,7 @@ use std::{
 use crate::{
     error::{set_exit_code, FromIo, UError, UResult, USimpleError},
     os_str_as_bytes, os_str_from_bytes, read_os_string_lines, show, show_error, show_warning_caps,
+    quoting_style,
     sum::{
         Blake2b, Blake3, Digest, DigestWriter, Md5, Sha1, Sha224, Sha256, Sha384, Sha3_224,
         Sha3_256, Sha3_384, Sha3_512, Sha512, Shake128, Shake256, Sm3, BSD, CRC, SYSV,
@@ -573,6 +574,17 @@ fn get_file_to_check(
 ) -> Result<Box<dyn Read>, LineCheckError> {
     let filename_bytes = os_str_as_bytes(filename).expect("UTF-8 error");
     let filename_lossy = String::from_utf8_lossy(filename_bytes);
+    let filename_escaped = quoting_style::escape_name(
+        filename,
+        &quoting_style::QuotingStyle::Shell {
+            escape: true,
+            always_quote: false,
+            show_control: true,
+        },
+    )
+    .into_string()
+    .unwrap_or_else(|_os_str| filename_lossy.to_string());
+
     if filename == "-" {
         Ok(Box::new(stdin())) // Use stdin if "-" is specified in the checksum file
     } else {
@@ -593,7 +605,7 @@ fn get_file_to_check(
                 {
                     show!(USimpleError::new(
                         1,
-                        format!("{filename_lossy}: Is a directory")
+                        format!("{filename_escaped}: Is a directory")
                     ));
                     // also regarded as a failed open
                     failed_open();
@@ -605,7 +617,7 @@ fn get_file_to_check(
             Err(err) => {
                 if !opts.ignore_missing {
                     // yes, we have both stderr and stdout here
-                    show!(err.map_err_context(|| filename_lossy.to_string()));
+                    show!(err.map_err_context(|| filename_escaped.to_string()));
                     failed_open();
                 }
                 // we could not open the file but we want to continue
