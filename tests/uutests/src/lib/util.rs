@@ -41,7 +41,7 @@ use std::os::windows::fs::{symlink_dir, symlink_file};
 use std::path::MAIN_SEPARATOR;
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
-use std::path::{MAIN_SEPARATOR, MAIN_SEPARATOR_STR};
+use std::path::MAIN_SEPARATOR_STR;
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc::{self, RecvTimeoutError};
