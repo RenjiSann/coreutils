@@ -38,7 +38,6 @@ use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
 #[cfg(windows)]
 use std::os::windows::fs::{symlink_dir, symlink_file};
-use std::path::MAIN_SEPARATOR;
 use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::path::MAIN_SEPARATOR_STR;
@@ -61,10 +60,14 @@ static MULTIPLE_STDIN_MEANINGLESS: &str = "Ucommand is designed around a typical
 static NO_STDIN_MEANINGLESS: &str = "Setting this flag has no effect if there is no stdin";
 static END_OF_TRANSMISSION_SEQUENCE: &[u8] = b"\n\x04";
 
+pub fn get_tests_binary() -> String {
+//env::current_exe().unwrap().into_os_string().into_string().unwrap()
+    env!("CARGO_BIN_EXE_coreutils").to_string()
+}
 // we can't use
 // pub const TESTS_BINARY: &str = env!("CARGO_BIN_EXE_coreutils");
 // as we are in a library, not a binary
-pub fn get_tests_binary() -> String {
+/*pub fn get_tests_binary() -> String {
     std::env::var("CARGO_BIN_EXE_coreutils").unwrap_or_else(|_| {
         let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
         let mut target_dir = manifest_dir.to_path_buf();
@@ -129,7 +132,7 @@ pub fn get_tests_binary() -> String {
         log_info("3= tmp", &tmp);
         tmp
     })
-}
+}*/
 
 pub const PATH: &str = env!("PATH");
 

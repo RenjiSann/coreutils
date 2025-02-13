@@ -51,6 +51,7 @@ fn util_name_double() {
     // input invalid utf8 to cause an error
     child.stdin.take().unwrap().write_all(&[255]).unwrap();
     let output = child.wait_with_output().unwrap();
+println!("output.stderr = {:?}", output.stderr);
     assert!(String::from_utf8(output.stderr).unwrap().contains("sort: "));
 }
 
