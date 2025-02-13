@@ -38,9 +38,10 @@ use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
 #[cfg(windows)]
 use std::os::windows::fs::{symlink_dir, symlink_file};
-#[cfg(windows)]
-use std::path::MAIN_SEPARATOR_STR;
+use std::path::MAIN_SEPARATOR;
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::path::{MAIN_SEPARATOR, MAIN_SEPARATOR_STR};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -81,7 +82,7 @@ pub fn get_tests_binary() -> String {
                     std::env::var("CARGO_BUILD_TARGET").unwrap_or_else(|_| String::from(""));
                 if !triple.is_empty() {
                     let triple_path = format!(
-                        "{}/{}/{}/coreutils",
+                        "{}{MAIN_SEPARATOR}{}{MAIN_SEPARATOR}{}{MAIN_SEPARATOR}coreutils",
                         target_dir.display(),
                         triple,
                         debug_or_release
@@ -93,7 +94,7 @@ pub fn get_tests_binary() -> String {
                     }
                 }
                 // Fallback to regular path
-                let tmp = format!("{}/{}/coreutils", target_dir.display(), debug_or_release);
+                let tmp = format!("{}{MAIN_SEPARATOR}{}{MAIN_SEPARATOR}coreutils", target_dir.display(), debug_or_release);
                 log_info("1= tmp0", &tmp);
                 return tmp;
             }
@@ -110,7 +111,7 @@ pub fn get_tests_binary() -> String {
         let triple = std::env::var("CARGO_BUILD_TARGET").unwrap_or_else(|_| String::from(""));
         if !triple.is_empty() {
             let triple_path = format!(
-                "{}/target/{}/{}/coreutils",
+                "{}{MAIN_SEPARATOR}target{MAIN_SEPARATOR}{}{MAIN_SEPARATOR}{}{MAIN_SEPARATOR}coreutils",
                 manifest_dir.display(),
                 triple,
                 debug_or_release
@@ -121,7 +122,7 @@ pub fn get_tests_binary() -> String {
             }
         }
         let tmp = format!(
-            "{}/target/{}/coreutils",
+            "{}{MAIN_SEPARATOR}target{MAIN_SEPARATOR}{}{MAIN_SEPARATOR}coreutils",
             manifest_dir.display(),
             debug_or_release
         );
