@@ -10,8 +10,12 @@ fn main() {
     let profile = env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
 
     // Get target and host triples
-    let target_triple = env::var("TARGET").ok();
-    let host_triple = env::var("HOST").ok();
+    let target_triple = env::var("TARGET");
+    let host_triple = env::var("HOST");
+
+    // Debug: Print the values we're working with
+    println!("cargo:warning=Target triple: {:?}", target_triple);
+    println!("cargo:warning=Host triple: {:?}", host_triple);
 
     // Construct the path to the coreutils binary
     let binary_name = if cfg!(windows) {
@@ -20,17 +24,22 @@ fn main() {
         "coreutils"
     };
 
-    // Build the binary path based on whether we're cross-compiling
-    let binary_path = if target_triple != host_triple {
-        // For cross compilation: target/<target-triple>/debug/coreutils
-        target_dir
-            .join(target_triple.unwrap())
-            .join(&profile)
-            .join(binary_name)
+    // Try both possible paths
+    let direct_path = target_dir.join(&profile).join(binary_name);
+    let target_path = if let Ok(target) = target_triple {
+        target_dir.join(&target).join(&profile).join(binary_name)
     } else {
-        // For native compilation: target/debug/coreutils
-        target_dir.join(&profile).join(binary_name)
+        direct_path.clone()
     };
+
+    // Check which path exists
+    let binary_path = if target_path.exists() {
+        target_path
+    } else {
+        direct_path
+    };
+
+    println!("cargo:warning=Checking path: {}", binary_path);
 
     // Output the binary path for use in the tests
     println!("cargo:rustc-env=CARGO_BIN_EXE_coreutils={}", binary_path);
