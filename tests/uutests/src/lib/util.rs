@@ -1936,12 +1936,12 @@ impl UCommand {
         if let Ok(entries) = fs::read_dir(path) {
             for entry in entries {
                 if let Ok(entry) = entry {
-                    let path_str = entry.path().to_string_lossy().to_string();
-                    log_info(&format!("{}File:", prefix), &path_str);
-
                     // Recursively list contents if it's a directory
                     if entry.path().is_dir() {
                         Self::list_directory_contents(&entry.path(), &format!("{}  ", prefix));
+                    } else {
+                        let path_str = entry.path().to_string_lossy().to_string();
+                        log_info(&format!("{}File:", prefix), &path_str);
                     }
                 }
             }
@@ -1953,7 +1953,12 @@ impl UCommand {
         self.has_run = true;
 
         // Check and list files in /project/target/ if it exists
-        let target_path = Path::new("/project/target");
+
+        #[cfg(not(windows))]
+        let path = "/project/target";
+        #[cfg(windows)]
+        let path = "D:\\a\\coreutils\\";
+        let target_path = Path::new(path);
         if target_path.exists() && target_path.is_dir() {
             match fs::read_dir(target_path) {
                 Ok(_) => {
