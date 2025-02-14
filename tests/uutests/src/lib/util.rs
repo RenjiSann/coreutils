@@ -38,9 +38,9 @@ use std::os::unix::process::CommandExt;
 use std::os::unix::process::ExitStatusExt;
 #[cfg(windows)]
 use std::os::windows::fs::{symlink_dir, symlink_file};
-use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::path::MAIN_SEPARATOR_STR;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc::{self, RecvTimeoutError};
@@ -61,7 +61,7 @@ static NO_STDIN_MEANINGLESS: &str = "Setting this flag has no effect if there is
 static END_OF_TRANSMISSION_SEQUENCE: &[u8] = b"\n\x04";
 
 pub fn get_tests_binary() -> String {
-//env::current_exe().unwrap().into_os_string().into_string().unwrap()
+    //env::current_exe().unwrap().into_os_string().into_string().unwrap()
     env!("CARGO_BIN_EXE_coreutils").to_string()
 }
 // we can't use
