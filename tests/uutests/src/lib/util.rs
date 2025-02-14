@@ -1954,10 +1954,13 @@ impl UCommand {
 
         // Check and list files in /project/target/ if it exists
 
-        #[cfg(not(windows))]
+        #[cfg(all(unix, not(target_os = "macos")))]
         let path = "/project/target";
         #[cfg(windows)]
         let path = "D:\\a\\coreutils\\";
+        #[cfg(target_os = "macos")]
+        let path = "/Users/runner/work/coreutils/coreutils/";
+
         let target_path = Path::new(path);
         if target_path.exists() && target_path.is_dir() {
             match fs::read_dir(target_path) {
