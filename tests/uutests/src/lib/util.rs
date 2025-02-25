@@ -1628,7 +1628,7 @@ impl UCommand {
     ///
     /// After the timeout elapsed these `run` methods (besides [`UCommand::run_no_wait`]) will
     /// panic. When [`UCommand::run_no_wait`] is used, this timeout is applied to
-    /// [`UChild::wait_with_output`] including all other waiting methods in [`UChild`] implicitly
+    /// `wait_with_output` including all other waiting methods in [`UChild`] implicitly
     /// using `wait_with_output()` and additionally [`UChild::kill`]. The default timeout of `kill`
     /// will be overwritten by this `timeout`.
     pub fn timeout(&mut self, timeout: Duration) -> &mut Self {
@@ -2456,12 +2456,12 @@ impl UChild {
 
     /// Wait for the child process to terminate and return a [`CmdResult`].
     ///
-    /// See [`UChild::wait_with_output`] for details on timeouts etc. This method can also be run if
+    /// See `wait_with_output` for details on timeouts etc. This method can also be run if
     /// the child process was killed with [`UChild::kill`].
     ///
     /// # Errors
     ///
-    /// Returns the error from the call to [`UChild::wait_with_output`] if any
+    /// Returns the error from the call to `wait_with_output` if any
     pub fn wait(self) -> io::Result<CmdResult> {
         let (bin_path, util_name, tmpd) = (
             self.bin_path.clone(),
@@ -2740,9 +2740,7 @@ impl UChild {
     /// the methods below when exiting the child process.
     ///
     /// * [`UChild::wait`]
-    /// * [`UChild::wait_with_output`]
     /// * [`UChild::pipe_in_and_wait`]
-    /// * [`UChild::pipe_in_and_wait_with_output`]
     ///
     /// Usually, there's no need to join manually but if needed, the [`UChild::join`] method can be
     /// used .
