@@ -5,7 +5,6 @@
 
 // spell-checker:ignore (words) egid euid pseudofloat
 
-use std::thread::sleep;
 use uutests::at_and_ucmd;
 use uutests::new_ucmd;
 use uutests::util::TestScenario;
