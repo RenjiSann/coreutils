@@ -1,10 +1,25 @@
 use std::{cmp::Ordering, sync::OnceLock};
 
-use icu::{
-    collator::{Collator, options::CollatorOptions},
-    locale::{Locale, locale},
-};
+use icu_collator::{CollatorBorrowed, options::CollatorOptions};
+use icu_locale::{Locale, locale};
+use thiserror::Error;
 
+use crate::error::UError;
+
+#[derive(Error, Debug)]
+pub enum CollationError {
+    #[error("test")]
+    Test,
+}
+impl UError for CollationError {
+    fn code(&self) -> i32 {
+        1
+    }
+}
+
+const DEFAULT_LOCALE: Locale = locale!("en-US-posix");
+
+/// Deduce the locale from the current environment
 fn get_collating_locale() -> &'static Locale {
     static COLLATING_LOCALE: OnceLock<Locale> = OnceLock::new();
 
@@ -23,24 +38,37 @@ fn get_collating_locale() -> &'static Locale {
 
         if let Ok(locale) = locale_var {
             if let Some(simple) = locale.split(&['-', '@']).next() {
-                let bcp127 = simple.replace("_", "-");
-                if let Ok(locale) = Locale::try_from_str(&bcp127) {
+                let bcp47 = simple.replace("_", "-");
+                if let Ok(locale) = Locale::try_from_str(&bcp47) {
                     return locale;
                 }
             }
         }
         // Default POSIX locale representing LC_ALL=C
-        locale!("en-US-posix")
+        DEFAULT_LOCALE
     })
 }
 
-pub fn locale_compare<T: AsRef<str>>(left: T, right: T) -> Ordering {
-    let collator = Collator::try_new(get_collating_locale().into(), CollatorOptions::default());
+static COLLATOR: OnceLock<CollatorBorrowed> = OnceLock::new();
 
-    if let Ok(collator) = collator {
-        collator.compare_utf8(left.as_ref().as_bytes(), right.as_ref().as_bytes())
-    } else {
+pub fn initialize_collator() -> Result<(), CollationError> {
+    let options = CollatorOptions::default();
+
+    // TODO: Use `get_or_try_init` when stabilized
+    COLLATOR.get_or_init(|| {
+        CollatorBorrowed::try_new(get_collating_locale().into(), options)
+            .expect("should never fail while we use compiled data")
+    });
+    Ok(())
+}
+
+pub fn locale_compare<T: AsRef<[u8]>>(left: T, right: T) -> Ordering {
+    if get_collating_locale() == &DEFAULT_LOCALE {
         // If no collator can be found from the locale env, use simple string comparison
         left.as_ref().cmp(right.as_ref())
+    } else if let Some(collator) = COLLATOR.get() {
+        collator.compare_utf8(left.as_ref(), right.as_ref())
+    } else {
+        panic!("COLLATOR should be initialized first")
     }
 }
