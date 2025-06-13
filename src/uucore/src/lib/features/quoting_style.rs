@@ -9,6 +9,8 @@ use std::char::from_digit;
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 
+use crate::i18n::{self, UEncoding};
+
 // These are characters with special meaning in the shell (e.g. bash).
 // The first const contains characters that only have a special meaning when they appear at the beginning of a name.
 const SPECIAL_SHELL_CHARS_START: &[u8] = b"~#";
@@ -382,32 +384,50 @@ fn escape_name_inner(name: &[u8], style: &QuotingStyle, dirname: bool) -> Vec<u8
             if *show_control {
                 name.to_owned()
             } else {
-                name.utf8_chunks()
-                    .map(|s| {
-                        let valid: String = s
-                            .valid()
-                            .chars()
-                            .flat_map(|c| EscapedChar::new_literal(c).hide_control())
-                            .collect();
-                        let invalid = "?".repeat(s.invalid().len());
-                        valid + &invalid
-                    })
-                    .collect::<String>()
-                    .into()
+                if i18n::get_locale_encoding() == Some(UEncoding::Utf8) {
+                    name.utf8_chunks()
+                        .map(|s| {
+                            let valid: String = s
+                                .valid()
+                                .chars()
+                                .flat_map(|c| EscapedChar::new_literal(c).hide_control())
+                                .collect();
+                            let invalid = "?".repeat(s.invalid().len());
+                            valid + &invalid
+                        })
+                        .collect::<String>()
+                        .into()
+                } else {
+                    // Assume simple ASCII if there is no encoding.
+                    name.iter()
+                        .map(|c| if c.is_ascii() { *c } else { b'?' })
+                        .collect()
+                }
             }
         }
         QuotingStyle::C { quotes } => {
-            let escaped_str: String = name
-                .utf8_chunks()
-                .flat_map(|s| {
-                    let valid = s
-                        .valid()
-                        .chars()
-                        .flat_map(|c| EscapedChar::new_c(c, *quotes, dirname));
-                    let invalid = s.invalid().iter().flat_map(|b| EscapedChar::new_octal(*b));
-                    valid.chain(invalid)
-                })
-                .collect::<String>();
+            let escaped_str: String = if i18n::get_locale_encoding() == Some(UEncoding::Utf8) {
+                name.utf8_chunks()
+                    .flat_map(|s| {
+                        let valid = s
+                            .valid()
+                            .chars()
+                            .flat_map(|c| EscapedChar::new_c(c, *quotes, dirname));
+                        let invalid = s.invalid().iter().flat_map(|b| EscapedChar::new_octal(*b));
+                        valid.chain(invalid)
+                    })
+                    .collect::<String>()
+            } else {
+                name.iter()
+                    .map(|c| {
+                        if c.is_ascii() {
+                            (*c as char).to_string()
+                        } else {
+                            format!("\\{c:0>3o}")
+                        }
+                    })
+                    .collect::<String>()
+            };
 
             match quotes {
                 Quotes::Single => format!("'{escaped_str}'"),
