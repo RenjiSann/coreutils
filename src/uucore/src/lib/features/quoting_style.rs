@@ -263,35 +263,65 @@ fn shell_without_escape(name: &[u8], quotes: Quotes, show_control_chars: bool) -
     let mut escaped_str = Vec::with_capacity(name.len());
     let mut utf8_buf = vec![0; 4];
 
-    for s in name.utf8_chunks() {
-        for c in s.valid().chars() {
-            let escaped = {
-                let ec = EscapedChar::new_shell(c, false, quotes);
-                if show_control_chars {
-                    ec
-                } else {
-                    ec.hide_control()
-                }
-            };
+    if i18n::get_locale_encoding() == Some(UEncoding::Utf8) {
+        for s in name.utf8_chunks() {
+            for c in s.valid().chars() {
+                let escaped = {
+                    let ec = EscapedChar::new_shell(c, false, quotes);
+                    if show_control_chars {
+                        ec
+                    } else {
+                        ec.hide_control()
+                    }
+                };
 
-            match escaped.state {
-                EscapeState::Backslash('\'') => escaped_str.extend_from_slice(b"'\\''"),
-                EscapeState::ForceQuote(x) => {
-                    must_quote = true;
-                    escaped_str.extend_from_slice(x.encode_utf8(&mut utf8_buf).as_bytes());
-                }
-                _ => {
-                    for c in escaped {
-                        escaped_str.extend_from_slice(c.encode_utf8(&mut utf8_buf).as_bytes());
+                match escaped.state {
+                    EscapeState::Backslash('\'') => escaped_str.extend_from_slice(b"'\\''"),
+                    EscapeState::ForceQuote(x) => {
+                        must_quote = true;
+                        escaped_str.extend_from_slice(x.encode_utf8(&mut utf8_buf).as_bytes());
+                    }
+                    _ => {
+                        for c in escaped {
+                            escaped_str.extend_from_slice(c.encode_utf8(&mut utf8_buf).as_bytes());
+                        }
                     }
                 }
             }
-        }
 
-        if show_control_chars {
-            escaped_str.extend_from_slice(s.invalid());
-        } else {
-            escaped_str.resize(escaped_str.len() + s.invalid().len(), b'?');
+            if show_control_chars {
+                escaped_str.extend_from_slice(s.invalid());
+            } else {
+                escaped_str.resize(escaped_str.len() + s.invalid().len(), b'?');
+            }
+        }
+    } else {
+        for b in name {
+            if b.is_ascii() {
+                let escaped = {
+                    let ec = EscapedChar::new_shell(*b as char, false, quotes);
+                    if show_control_chars {
+                        ec
+                    } else {
+                        ec.hide_control()
+                    }
+                };
+
+                match escaped.state {
+                    EscapeState::Backslash('\'') => escaped_str.extend_from_slice(b"'\\''"),
+                    EscapeState::ForceQuote(x) => {
+                        must_quote = true;
+                        escaped_str.extend_from_slice(x.encode_utf8(&mut utf8_buf).as_bytes());
+                    }
+                    _ => {
+                        for c in escaped {
+                            escaped_str.extend_from_slice(c.encode_utf8(&mut utf8_buf).as_bytes());
+                        }
+                    }
+                }
+            } else {
+                escaped_str.push(b'?');
+            }
         }
     }
 
@@ -306,59 +336,80 @@ fn shell_with_escape(name: &[u8], quotes: Quotes) -> (Vec<u8>, bool) {
     let mut must_quote = false;
     let mut escaped_str = String::with_capacity(name.len());
 
-    for s in name.utf8_chunks() {
-        for c in s.valid().chars() {
-            let escaped = EscapedChar::new_shell(c, true, quotes);
-            match escaped.state {
-                EscapeState::Char(x) => {
-                    if in_dollar {
-                        escaped_str.push_str("''");
+    if i18n::get_locale_encoding() == Some(UEncoding::Utf8) {
+        for s in name.utf8_chunks() {
+            for c in s.valid().chars() {
+                let escaped = EscapedChar::new_shell(c, true, quotes);
+                match escaped.state {
+                    EscapeState::Char(x) => {
+                        if in_dollar {
+                            escaped_str.push_str("''");
+                            in_dollar = false;
+                        }
+                        escaped_str.push(x);
+                    }
+                    EscapeState::ForceQuote(x) => {
+                        if in_dollar {
+                            escaped_str.push_str("''");
+                            in_dollar = false;
+                        }
+                        must_quote = true;
+                        escaped_str.push(x);
+                    }
+                    // Single quotes are not put in dollar expressions, but are escaped
+                    // if the string also contains double quotes. In that case, they must
+                    // be handled separately.
+                    EscapeState::Backslash('\'') => {
+                        must_quote = true;
                         in_dollar = false;
+                        escaped_str.push_str("'\\''");
                     }
-                    escaped_str.push(x);
-                }
-                EscapeState::ForceQuote(x) => {
-                    if in_dollar {
-                        escaped_str.push_str("''");
-                        in_dollar = false;
-                    }
-                    must_quote = true;
-                    escaped_str.push(x);
-                }
-                // Single quotes are not put in dollar expressions, but are escaped
-                // if the string also contains double quotes. In that case, they must
-                // be handled separately.
-                EscapeState::Backslash('\'') => {
-                    must_quote = true;
-                    in_dollar = false;
-                    escaped_str.push_str("'\\''");
-                }
-                _ => {
-                    if !in_dollar {
-                        escaped_str.push_str("'$'");
-                        in_dollar = true;
-                    }
-                    must_quote = true;
-                    for char in escaped {
-                        escaped_str.push(char);
+                    _ => {
+                        if !in_dollar {
+                            escaped_str.push_str("'$'");
+                            in_dollar = true;
+                        }
+                        must_quote = true;
+                        for char in escaped {
+                            escaped_str.push(char);
+                        }
                     }
                 }
+            }
+            if !s.invalid().is_empty() {
+                if !in_dollar {
+                    escaped_str.push_str("'$'");
+                    in_dollar = true;
+                }
+                must_quote = true;
+                let escaped_bytes: String = s
+                    .invalid()
+                    .iter()
+                    .flat_map(|b| EscapedChar::new_octal(*b))
+                    .collect();
+                escaped_str.push_str(&escaped_bytes);
             }
         }
-        if !s.invalid().is_empty() {
-            if !in_dollar {
-                escaped_str.push_str("'$'");
-                in_dollar = true;
+    } else {
+        for b in name {
+            if b.is_ascii() {
+                if in_dollar {
+                    escaped_str.push_str("''");
+                    in_dollar = false;
+                }
+
+                escaped_str.push(*b as char);
+            } else {
+                must_quote = true;
+                if !in_dollar {
+                    escaped_str.push_str("'$'");
+                    in_dollar = true;
+                }
+                escaped_str.push_str(&format!("\\{b:0>3o}"));
             }
-            must_quote = true;
-            let escaped_bytes: String = s
-                .invalid()
-                .iter()
-                .flat_map(|b| EscapedChar::new_octal(*b))
-                .collect();
-            escaped_str.push_str(&escaped_bytes);
         }
     }
+
     must_quote = must_quote || bytes_start_with(name, SPECIAL_SHELL_CHARS_START);
     (escaped_str.into(), must_quote)
 }
