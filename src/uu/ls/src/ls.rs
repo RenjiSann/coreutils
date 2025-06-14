@@ -44,6 +44,7 @@ use uucore::format::human::{SizeFormat, human_readable};
 use uucore::fs::FileInformation;
 #[cfg(all(unix, not(any(target_os = "android", target_os = "macos"))))]
 use uucore::fsxattr::has_acl;
+use uucore::i18n;
 #[cfg(unix)]
 use uucore::libc::{S_IXGRP, S_IXOTH, S_IXUSR};
 #[cfg(any(
@@ -2111,6 +2112,11 @@ pub fn list(locs: Vec<&Path>, config: &Config) -> UResult<()> {
         }
     }
 
+    // Init the collator before sorting entries if we're sorting name-wise
+    if config.sort == Sort::Name {
+        let _ = i18n::initialize_collator();
+    }
+
     sort_entries(&mut files, config, &mut state.out);
     sort_entries(&mut dirs, config, &mut state.out);
 
@@ -2197,7 +2203,12 @@ fn sort_entries(entries: &mut [PathData], config: &Config, out: &mut BufWriter<S
             entries.sort_by_key(|k| Reverse(k.get_metadata(out).map(|md| md.len()).unwrap_or(0)));
         }
         // The default sort in GNU ls is case insensitive
-        Sort::Name => entries.sort_by(|a, b| a.display_name.cmp(&b.display_name)),
+        Sort::Name => entries.sort_by(|a, b| {
+            i18n::locale_compare(
+                a.display_name.as_encoded_bytes(),
+                b.display_name.as_encoded_bytes(),
+            )
+        }),
         Sort::Version => entries.sort_by(|a, b| {
             version_cmp(&a.p_buf.to_string_lossy(), &b.p_buf.to_string_lossy())
                 .then(a.p_buf.to_string_lossy().cmp(&b.p_buf.to_string_lossy()))
