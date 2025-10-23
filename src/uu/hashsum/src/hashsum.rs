@@ -26,9 +26,9 @@ use uucore::checksum::digest_reader;
 use uucore::checksum::escape_filename;
 use uucore::checksum::perform_checksum_validation;
 use uucore::error::{FromIo, UResult};
-use uucore::format_usage;
 use uucore::sum::{Digest, Sha3_224, Sha3_256, Sha3_384, Sha3_512, Shake128, Shake256};
 use uucore::translate;
+use uucore::{format_usage, show_warning};
 
 const NAME: &str = "hashsum";
 // Using the same read buffer size as GNU
@@ -167,6 +167,10 @@ fn parse_bit_num(arg: &str) -> Result<usize, ParseIntError> {
 
 #[uucore::main]
 pub fn uumain(mut args: impl uucore::Args) -> UResult<()> {
+    show_warning!(concat!(
+        "uutils hashsum based executables are deprecated and will be removed,",
+        " please use cksum instead"
+    ));
     // if there is no program name for some reason, default to "hashsum"
     let program = args.next().unwrap_or_else(|| OsString::from(NAME));
     let binary_name = Path::new(&program)
