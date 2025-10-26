@@ -9,8 +9,9 @@ use uutests::new_ucmd;
 use uutests::util::TestScenario;
 use uutests::util_name;
 
-const ALGOS: [&str; 11] = [
-    "sysv", "bsd", "crc", "md5", "sha1", "sha224", "sha256", "sha384", "sha512", "blake2b", "sm3",
+const ALGOS: [&str; 12] = [
+    "sysv", "bsd", "crc", "crc32b", "md5", "sha1", "sha224", "sha256", "sha384", "sha512",
+    "blake2b", "sm3",
 ];
 
 #[test]
