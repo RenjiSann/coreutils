@@ -284,7 +284,7 @@ where
 
         let mut digest = options.algo_kind.create_digest();
 
-        let (sum_hex, sz) = digest_reader(
+        let (sum, sz) = digest_reader(
             &mut digest,
             &mut file,
             options.binary,

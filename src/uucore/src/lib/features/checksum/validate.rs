@@ -17,6 +17,7 @@ use os_display::Quotable;
 use crate::checksum::{AlgoKind, ChecksumError, SizedAlgoKind, digest_reader, unescape_filename};
 use crate::error::{FromIo, UError, UResult, USimpleError};
 use crate::quoting_style::{QuotingStyle, locale_aware_escape_name};
+use crate::sum::DigestOutput;
 use crate::{
     os_str_as_bytes, os_str_from_bytes, read_os_string_lines, show, show_error, show_warning_caps,
     util_name,
@@ -660,7 +661,11 @@ fn compute_and_check_digest_from_file(
     .unwrap();
 
     // Do the checksum validation
-    let checksum_correct = expected_checksum == calculated_checksum;
+    let checksum_correct = match calculated_checksum {
+        DigestOutput::Vec(data) => expected_checksum == hex::encode(data),
+        DigestOutput::Number(n) => expected_checksum == n.to_string(),
+    };
+
     print_file_report(
         std::io::stdout(),
         filename,

@@ -18,6 +18,13 @@ use hex::encode;
 #[cfg(windows)]
 use memchr::memmem;
 
+/// The possible outputs of a digest
+#[derive(Debug, PartialEq, Eq)]
+pub enum DigestOutput {
+    Vec(Vec<u8>),
+    Number(u64),
+}
+
 pub trait Digest {
     fn new() -> Self
     where
@@ -29,6 +36,13 @@ pub trait Digest {
     fn output_bytes(&self) -> usize {
         self.output_bits().div_ceil(8)
     }
+
+    fn result(&mut self) -> DigestOutput {
+        let mut buf: Vec<u8> = vec![0; self.output_bytes()];
+        self.hash_finalize(&mut buf);
+        DigestOutput::Vec(buf)
+    }
+
     fn result_str(&mut self) -> String {
         let mut buf: Vec<u8> = vec![0; self.output_bytes()];
         self.hash_finalize(&mut buf);
@@ -167,6 +181,12 @@ impl Digest for Crc {
         out.copy_from_slice(&self.digest.finalize().to_ne_bytes());
     }
 
+    fn result(&mut self) -> DigestOutput {
+        let mut out: [u8; 8] = [0; 8];
+        self.hash_finalize(&mut out);
+        DigestOutput::Number(u64::from_ne_bytes(out))
+    }
+
     fn result_str(&mut self) -> String {
         let mut out: [u8; 8] = [0; 8];
         self.hash_finalize(&mut out);
@@ -214,10 +234,16 @@ impl Digest for CRC32B {
         32
     }
 
+    fn result(&mut self) -> DigestOutput {
+        let mut out = [0; 4];
+        self.hash_finalize(&mut out);
+        DigestOutput::Number(u32::from_ne_bytes(out) as u64)
+    }
+
     fn result_str(&mut self) -> String {
         let mut out = [0; 4];
         self.hash_finalize(&mut out);
-        format!("{}", u32::from_be_bytes(out))
+        u32::from_be_bytes(out).to_string()
     }
 }
 
@@ -240,10 +266,16 @@ impl Digest for Bsd {
         out.copy_from_slice(&self.state.to_ne_bytes());
     }
 
+    fn result(&mut self) -> DigestOutput {
+        let mut _out: Vec<u8> = vec![0; 2];
+        self.hash_finalize(&mut _out);
+        DigestOutput::Number(self.state as u64)
+    }
+
     fn result_str(&mut self) -> String {
         let mut _out: Vec<u8> = vec![0; 2];
         self.hash_finalize(&mut _out);
-        format!("{}", self.state)
+        self.state.to_string()
     }
 
     fn reset(&mut self) {
@@ -275,10 +307,16 @@ impl Digest for SysV {
         out.copy_from_slice(&(self.state as u16).to_ne_bytes());
     }
 
+    fn result(&mut self) -> DigestOutput {
+        let mut _out: Vec<u8> = vec![0; 2];
+        self.hash_finalize(&mut _out);
+        DigestOutput::Number(self.state as u64)
+    }
+
     fn result_str(&mut self) -> String {
         let mut _out: Vec<u8> = vec![0; 2];
         self.hash_finalize(&mut _out);
-        format!("{}", self.state)
+        self.state.to_string()
     }
 
     fn reset(&mut self) {
