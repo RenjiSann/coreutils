@@ -371,19 +371,38 @@ impl LineFormat {
             return None;
         }
 
-        let mut parts = checksum.splitn(2, |&b| b == b'=');
-        let main = parts.next().unwrap(); // Always exists since checksum isn't empty
-        let padding = parts.next().unwrap_or_default(); // Empty if no '='
+        let mut is_base64 = false;
+        let mut index = 0;
 
-        if main.is_empty()
-            || !main
-                .iter()
-                .all(|&b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/')
-        {
-            return None;
+        while index < checksum.len() {
+            match checksum[index..] {
+                // ASCII alphanumeric
+                [b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9', ..] => {
+                    index += 1;
+                    continue;
+                }
+                [b'+' | b'/', ..] => {
+                    is_base64 = true;
+                    index += 1;
+                    continue;
+                }
+                [b'='] | [b'=', b'='] | [b'=', b'=', b'='] => {
+                    is_base64 = true;
+                    break;
+                }
+                // Any other character means the checksum is wrong
+                _ => return None,
+            }
         }
 
-        if padding.len() > 2 || padding.iter().any(|&b| b != b'=') {
+        // If base64 characters were encountered, make sure the checksum has a
+        // length multiple of 4.
+        //
+        // This check is not enough because it may allow base64-encoded
+        // checksums that are fully alphanumeric. Another check happens later
+        // when we are provided with a length hint to detect ambiguous
+        // base64-encoded checksums.
+        if is_base64 && checksum.len() % 4 != 0 {
             return None;
         }
 
