@@ -115,6 +115,8 @@ impl AlgoKind {
             ALGORITHM_OPTIONS_SHA384 => Sha384,
             ALGORITHM_OPTIONS_SHA512 => Sha512,
 
+            // Extensions not in GNU
+            ALGORITHM_OPTIONS_BLAKE3 => Blake3,
             ALGORITHM_OPTIONS_SHAKE128 => Shake128,
             ALGORITHM_OPTIONS_SHAKE256 => Shake256,
             _ => return Err(ChecksumError::UnknownAlgorithm(algo.as_ref().to_string()).into()),
