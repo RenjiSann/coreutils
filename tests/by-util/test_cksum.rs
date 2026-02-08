@@ -3226,3 +3226,14 @@ fn test_shake256(#[case] args: &[&str], #[case] expected: &str) {
         .succeeds()
         .stdout_only(format!("SHAKE256 (-) = {expected}\n"));
 }
+
+#[rstest]
+#[case(b"foo", "04e0bb39f30b1a3feb89f536c93be15055482df748674b00d26e5a75777702e9")]
+fn test_blake3b(#[case] input: &[u8], #[case] expected: &str) {
+    new_ucmd!()
+        .arg("-a")
+        .arg("blake3")
+        .pipe_in(input)
+        .succeeds()
+        .stdout_only(format!("BLAKE3 (-) = {expected}\n"));
+}
