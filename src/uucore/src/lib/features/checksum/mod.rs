@@ -115,6 +115,8 @@ impl AlgoKind {
             ALGORITHM_OPTIONS_SHA384 => Sha384,
             ALGORITHM_OPTIONS_SHA512 => Sha512,
 
+            // Extensions not in GNU as of version 9.10
+            ALGORITHM_OPTIONS_BLAKE3 => Blake3,
             ALGORITHM_OPTIONS_SHAKE128 => Shake128,
             ALGORITHM_OPTIONS_SHAKE256 => Shake256,
             _ => return Err(ChecksumError::UnknownAlgorithm(algo.as_ref().to_string()).into()),
@@ -245,11 +247,12 @@ pub enum SizedAlgoKind {
     Md5,
     Sm3,
     Sha1,
-    Blake3,
     Sha2(ShaLength),
     Sha3(ShaLength),
     // Note: we store Blake2b's length as BYTES.
     Blake2b(Option<usize>),
+    // Note: we store Blake3's length as BYTES.
+    Blake3(Option<usize>),
     Shake128(Option<usize>),
     Shake256(Option<usize>),
 }
@@ -266,7 +269,6 @@ impl SizedAlgoKind {
                 | ak::Md5
                 | ak::Sm3
                 | ak::Sha1
-                | ak::Blake3
                 | ak::Sha224
                 | ak::Sha256
                 | ak::Sha384
@@ -281,8 +283,8 @@ impl SizedAlgoKind {
             (ak::Md5, _) => Ok(Self::Md5),
             (ak::Sm3, _) => Ok(Self::Sm3),
             (ak::Sha1, _) => Ok(Self::Sha1),
-            (ak::Blake3, _) => Ok(Self::Blake3),
 
+            (ak::Blake3, l) => Ok(Self::Blake3(l)),
             (ak::Shake128, l) => Ok(Self::Shake128(l)),
             (ak::Shake256, l) => Ok(Self::Shake256(l)),
             (ak::Sha2, Some(l)) => Ok(Self::Sha2(ShaLength::try_from(l)?)),
@@ -305,19 +307,22 @@ impl SizedAlgoKind {
     }
 
     pub fn to_tag(self) -> String {
-        use SizedAlgoKind::*;
         match self {
-            Md5 => "MD5".into(),
-            Sm3 => "SM3".into(),
-            Sha1 => "SHA1".into(),
-            Blake3 => "BLAKE3".into(),
-            Sha2(len) => format!("SHA{}", len.as_usize()),
-            Sha3(len) => format!("SHA3-{}", len.as_usize()),
-            Blake2b(Some(byte_len)) => format!("BLAKE2b-{}", byte_len * 8),
-            Blake2b(None) => "BLAKE2b".into(),
-            Shake128(_) => "SHAKE128".into(),
-            Shake256(_) => "SHAKE256".into(),
-            Sysv | Bsd | Crc | Crc32b => panic!("Should not be used for tagging"),
+            Self::Md5 => "MD5".into(),
+            Self::Sm3 => "SM3".into(),
+            Self::Sha1 => "SHA1".into(),
+            Self::Sha2(len) => format!("SHA{}", len.as_usize()),
+            Self::Sha3(len) => format!("SHA3-{}", len.as_usize()),
+            Self::Blake2b(Some(byte_len)) => format!("BLAKE2b-{}", byte_len * 8),
+            Self::Blake2b(None) => "BLAKE2b".into(),
+            Self::Blake3(byte_len) => {
+                format!("BLAKE3-{}", byte_len.unwrap_or(Blake3::DEFAULT_BYTE_SIZE))
+            }
+            Self::Shake128(_) => "SHAKE128".into(),
+            Self::Shake256(_) => "SHAKE256".into(),
+            Self::Sysv | Self::Bsd | Self::Crc | Self::Crc32b => {
+                panic!("Should not be used for tagging")
+            }
         }
     }
 
@@ -331,7 +336,6 @@ impl SizedAlgoKind {
             Self::Md5 => Box::new(Md5::default()),
             Self::Sm3 => Box::new(Sm3::default()),
             Self::Sha1 => Box::new(Sha1::default()),
-            Self::Blake3 => Box::new(Blake3::default()),
             Self::Sha2(Len224) => Box::new(Sha224::default()),
             Self::Sha2(Len256) => Box::new(Sha256::default()),
             Self::Sha2(Len384) => Box::new(Sha384::default()),
@@ -342,6 +346,9 @@ impl SizedAlgoKind {
             Self::Sha3(Len512) => Box::new(Sha3_512::default()),
             Self::Blake2b(len_opt) => {
                 Box::new(len_opt.map(Blake2b::with_output_bytes).unwrap_or_default())
+            }
+            Self::Blake3(len_opt) => {
+                Box::new(len_opt.map(Blake3::with_output_bytes).unwrap_or_default())
             }
             Self::Shake128(len_opt) => {
                 Box::new(len_opt.map(Shake128::with_output_bits).unwrap_or_default())
@@ -361,7 +368,7 @@ impl SizedAlgoKind {
             Self::Md5 => 128,
             Self::Sm3 => 512,
             Self::Sha1 => 160,
-            Self::Blake3 => 256,
+            Self::Blake3(len) => len.unwrap_or(Blake3::DEFAULT_BYTE_SIZE) * 8,
             Self::Sha2(len) => len.as_usize(),
             Self::Sha3(len) => len.as_usize(),
             Self::Blake2b(len) => len.unwrap_or(Blake2b::DEFAULT_BYTE_SIZE * 8),

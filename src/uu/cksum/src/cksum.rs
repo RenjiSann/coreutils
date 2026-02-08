@@ -61,11 +61,14 @@ fn maybe_sanitize_length(
         // validation is performed on this length, any value is valid. If the
         // given length is not a multiple of 8, the last byte of the output
         // will have its extra bits set to zero.
-        (Some(AlgoKind::Shake128 | AlgoKind::Shake256), Some(len)) => match len.parse::<usize>() {
-            Ok(0) => Ok(None),
-            Ok(l) => Ok(Some(l)),
-            Err(_) => Err(ChecksumError::InvalidLength(len.into()).into()),
-        },
+        // For BLAKE3, the length is interpreted as a byte length.
+        (Some(AlgoKind::Shake128 | AlgoKind::Shake256 | AlgoKind::Blake3), Some(len)) => {
+            match len.parse::<usize>() {
+                Ok(0) => Ok(None),
+                Ok(l) => Ok(Some(l)),
+                Err(_) => Err(ChecksumError::InvalidLength(len.into()).into()),
+            }
+        }
 
         // For BLAKE2b, if a length is provided, validate it.
         (Some(AlgoKind::Blake2b), Some(len)) => calculate_blake2b_length_str(len),
