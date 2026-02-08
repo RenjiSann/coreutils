@@ -3221,3 +3221,62 @@ fn test_shake256(#[case] args: &[&str], #[case] expected: &str) {
         .succeeds()
         .stdout_only(format!("SHAKE256 (-) = {expected}\n"));
 }
+
+#[rstest]
+#[case(
+    b"foo",
+    "04e0bb39f30b1a3feb89f536c93be15055482df748674b00d26e5a75777702e9"
+)]
+fn test_blake3b_no_length(#[case] input: &[u8], #[case] expected: &str) {
+    new_ucmd!()
+        .arg("-a")
+        .arg("blake3")
+        .pipe_in(input)
+        .succeeds()
+        .stdout_only(format!("BLAKE3-32 (-) = {expected}\n"));
+}
+
+#[rstest]
+#[case(
+    b"foo",
+    "04e0bb39f30b1a3feb89f536c93be15055482df748674b00d26e5a75777702e9",
+    0
+)]
+#[case(
+    b"foo",
+    "04e0bb39f30b1a3feb89f536c93be15055482df748674b00d26e5a75777702e9",
+    32
+)]
+#[case(
+    b"foo",
+    "04e0bb39f30b1a3feb89f536c93be15055482df748674b00d26e5a75777702e9791074b7511b59d31c71c62f5a745689fa6c",
+    50
+)]
+#[case(b"foo", "04e0bb39f3", 5)]
+#[case(b"foo", "04e0", 2)]
+#[case(b"foo", "04", 1)]
+fn test_blake3b(#[case] input: &[u8], #[case] expected: &str, #[case] length: usize) {
+    new_ucmd!()
+        .arg("-a")
+        .arg("blake3")
+        .args(&["-l", &length.to_string()])
+        .pipe_in(input)
+        .succeeds()
+        .stdout_only(format!(
+            "BLAKE3-{} (-) = {expected}\n",
+            match length {
+                0 => "32".to_string(),
+                i => i.to_string(),
+            }
+        ));
+
+    // with --untagged
+    new_ucmd!()
+        .arg("-a")
+        .arg("blake3")
+        .arg("--untagged")
+        .args(&["-l", &length.to_string()])
+        .pipe_in(input)
+        .succeeds()
+        .stdout_only(format!("{expected}  -\n"));
+}
