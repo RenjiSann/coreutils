@@ -53,6 +53,7 @@ pub enum QuotingStyle {
     /// Used in, e.g., `ls --quote-name`.
     C {
         quotes: CQuotes,
+        always_quote: bool,
     },
 
     /// Simply escape characters without quoting
@@ -94,12 +95,19 @@ impl QuotingStyle {
         show_control: false,
     };
 
-    pub const C_DOUBLE: Self = Self::C {
-        quotes: CQuotes::DOUBLE,
-    };
-
     pub const C_SINGLE: Self = Self::C {
         quotes: CQuotes::SINGLE,
+        always_quote: true,
+    };
+
+    pub const C_ALWAYS: Self = Self::C {
+        quotes: CQuotes::DOUBLE,
+        always_quote: true,
+    };
+
+    pub const C_MAYBE: Self = Self::C {
+        quotes: CQuotes::DOUBLE,
+        always_quote: false,
     };
 
     /// Set the `show_control` field of the quoting style.
@@ -137,6 +145,10 @@ impl QuotingStyle {
                 show_control,
                 always_quote,
             },
+            Self::C { quotes, .. } => Self::C {
+                quotes,
+                always_quote,
+            },
             _ => self,
         }
     }
@@ -152,7 +164,8 @@ impl QuotingStyle {
             "shell-always" => Self::SHELL_ALWAYS,
             "shell-escape" => Self::SHELL_ESCAPE,
             "shell-escape-always" => Self::SHELL_ESCAPE_ALWAYS,
-            "c" => Self::C_DOUBLE,
+            "c" => Self::C_ALWAYS,
+            "c-maybe" => Self::C_MAYBE,
             "escape" => Self::Escape,
             "locale" => Self::Locale,
             "clocale" => Self::CLocale,
@@ -176,7 +189,9 @@ impl fmt::Display for QuotingStyle {
                     if always_quote { "-always" } else { "" }
                 )
             }
-            Self::C { .. } => f.write_str("c"),
+            Self::C { always_quote, .. } => {
+                write!(f, "c{}", if always_quote { "" } else { "-maybe" })
+            }
             Self::Escape => f.write_str("escape"),
             Self::Literal { .. } => f.write_str("literal"),
             Self::Locale => f.write_str("locale"),
@@ -243,7 +258,13 @@ fn escape_name_inner(
 
     let mut quoter: Box<dyn Quoter> = match style {
         QuotingStyle::Literal { .. } => Box::new(LiteralQuoter::new(name.len())),
-        QuotingStyle::C { quotes } => Box::new(CQuoter::new(quotes.always(), dirname, name.len())),
+        QuotingStyle::C {
+            quotes,
+            always_quote,
+        } => {
+            let quotes = quotes.always_if(always_quote);
+            Box::new(CQuoter::new(quotes, dirname, name.len()))
+        }
         QuotingStyle::Escape => Box::new(CQuoter::new(CQuotesEnforce::None, dirname, name.len())),
         QuotingStyle::CLocale => {
             let quotes = CQuotes::utf8_or(encoding, CQuotes::DOUBLE);
@@ -401,6 +422,7 @@ mod tests {
                 ("one_two", "literal-show"),
                 ("one_two", "escape"),
                 ("\"one_two\"", "c"),
+                ("one_two", "c-maybe"),
                 ("one_two", "shell"),
                 ("one_two", "shell-show"),
                 ("'one_two'", "shell-always"),
@@ -420,6 +442,7 @@ mod tests {
                 ("", "literal-show"),
                 ("", "escape"),
                 ("\"\"", "c"),
+                ("", "c-maybe"),
                 ("''", "shell"),
                 ("''", "shell-show"),
                 ("''", "shell-always"),
@@ -439,6 +462,7 @@ mod tests {
                 ("one two", "literal-show"),
                 ("one\\ two", "escape"),
                 ("\"one two\"", "c"),
+                ("one two", "c-maybe"),
                 ("'one two'", "shell"),
                 ("'one two'", "shell-show"),
                 ("'one two'", "shell-always"),
@@ -455,6 +479,7 @@ mod tests {
                 (" one", "literal-show"),
                 ("\\ one", "escape"),
                 ("\" one\"", "c"),
+                (" one", "c-maybe"),
                 ("' one'", "shell"),
                 ("' one'", "shell-show"),
                 ("' one'", "shell-always"),
@@ -475,6 +500,7 @@ mod tests {
                 ("one\"two", "literal-show"),
                 ("one\"two", "escape"),
                 ("\"one\\\"two\"", "c"),
+                ("\"one\\\"two\"", "c-maybe"),
                 ("'one\"two'", "shell"),
                 ("'one\"two'", "shell-show"),
                 ("'one\"two'", "shell-always"),
@@ -492,6 +518,7 @@ mod tests {
                 ("one'two", "literal-show"),
                 ("one'two", "escape"),
                 ("\"one'two\"", "c"),
+                ("one'two", "c-maybe"),
                 ("\"one'two\"", "shell"),
                 ("\"one'two\"", "shell-show"),
                 ("\"one'two\"", "shell-always"),
@@ -509,6 +536,7 @@ mod tests {
                 ("one'two\"three", "literal-show"),
                 ("one'two\"three", "escape"),
                 ("\"one'two\\\"three\"", "c"),
+                ("\"one'two\\\"three\"", "c-maybe"),
                 ("'one'\\''two\"three'", "shell"),
                 ("'one'\\''two\"three'", "shell-show"),
                 ("'one'\\''two\"three'", "shell-always"),
@@ -526,6 +554,7 @@ mod tests {
                 ("one''two\"\"three", "literal-show"),
                 ("one''two\"\"three", "escape"),
                 ("\"one''two\\\"\\\"three\"", "c"),
+                ("\"one''two\\\"\\\"three\"", "c-maybe"),
                 ("'one'\\'''\\''two\"\"three'", "shell"),
                 ("'one'\\'''\\''two\"\"three'", "shell-show"),
                 ("'one'\\'''\\''two\"\"three'", "shell-always"),
@@ -546,6 +575,7 @@ mod tests {
                 ("one\ntwo", "literal-show"),
                 ("one\\ntwo", "escape"),
                 ("\"one\\ntwo\"", "c"),
+                ("\"one\\ntwo\"", "c-maybe"),
                 ("'one?two'", "shell"),
                 ("'one\ntwo'", "shell-show"),
                 ("'one?two'", "shell-always"),
@@ -563,6 +593,7 @@ mod tests {
                 ("one\n&two", "literal-show"),
                 ("one\\n&two", "escape"),
                 ("\"one\\n&two\"", "c"),
+                ("\"one\\n&two\"", "c-maybe"),
                 ("'one?&two'", "shell"),
                 ("'one\n&two'", "shell-show"),
                 ("'one?&two'", "shell-always"),
@@ -589,6 +620,10 @@ mod tests {
                 (
                     "\"\\000\\001\\002\\003\\004\\005\\006\\a\\b\\t\\n\\v\\f\\r\\016\\017\"",
                     "c",
+                ),
+                (
+                    "\"\\000\\001\\002\\003\\004\\005\\006\\a\\b\\t\\n\\v\\f\\r\\016\\017\"",
+                    "c-maybe",
                 ),
                 ("'????????????????'", "shell"),
                 (
@@ -628,6 +663,10 @@ mod tests {
                     "\"\\020\\021\\022\\023\\024\\025\\026\\027\\030\\031\\032\\033\\034\\035\\036\\037\"",
                     "c",
                 ),
+                (
+                    "\"\\020\\021\\022\\023\\024\\025\\026\\027\\030\\031\\032\\033\\034\\035\\036\\037\"",
+                    "c-maybe",
+                ),
                 ("????????????????", "shell"),
                 (
                     "\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F",
@@ -657,6 +696,7 @@ mod tests {
                 ("\x7F", "literal-show"),
                 ("\\177", "escape"),
                 ("\"\\177\"", "c"),
+                ("\"\\177\"", "c-maybe"),
                 ("?", "shell"),
                 ("\x7F", "shell-show"),
                 ("'?'", "shell-always"),
@@ -679,6 +719,10 @@ mod tests {
                 (
                     "\"\\302\\200\\302\\201\\302\\202\\302\\203\\302\\204\\302\\205\\302\\206\\302\\207\\302\\210\\302\\211\\302\\212\\302\\213\\302\\214\\302\\215\\302\\216\\302\\217\"",
                     "c",
+                ),
+                (
+                    "\"\\302\\200\\302\\201\\302\\202\\302\\203\\302\\204\\302\\205\\302\\206\\302\\207\\302\\210\\302\\211\\302\\212\\302\\213\\302\\214\\302\\215\\302\\216\\302\\217\"",
+                    "c-maybe",
                 ),
                 (test_str, "shell-show"),
                 (&format!("'{test_str}'"), "shell-always-show"),
@@ -725,6 +769,10 @@ mod tests {
                 (
                     "\"\\302\\220\\302\\221\\302\\222\\302\\223\\302\\224\\302\\225\\302\\226\\302\\227\\302\\230\\302\\231\\302\\232\\302\\233\\302\\234\\302\\235\\302\\236\\302\\237\"",
                     "c",
+                ),
+                (
+                    "\"\\302\\220\\302\\221\\302\\222\\302\\223\\302\\224\\302\\225\\302\\226\\302\\227\\302\\230\\302\\231\\302\\232\\302\\233\\302\\234\\302\\235\\302\\236\\302\\237\"",
+                    "c-maybe",
                 ),
                 (test_str, "shell-show"),
                 (&format!("'{test_str}'"), "shell-always-show"),
@@ -776,6 +824,7 @@ mod tests {
                 (b"\xA7", "literal-show"),
                 (b"\\247", "escape"),
                 (b"\"\\247\"", "c"),
+                (b"\"\\247\"", "c-maybe"),
                 (b"?", "shell"),
                 (b"\xA7", "shell-show"),
                 (b"'?'", "shell-always"),
@@ -804,6 +853,7 @@ mod tests {
                 (b"\xC2\xA7", "literal"),
                 (b"\xC2\xA7", "escape"),
                 (b"\"\xC2\xA7\"", "c"),
+                (b"\xC2\xA7", "c-maybe"),
                 (b"\xC2\xA7", "shell"),
                 (b"'\xC2\xA7'", "shell-always"),
                 (b"\xC2\xA7", "shell-escape"),
@@ -817,6 +867,7 @@ mod tests {
                 (b"??", "literal"),
                 (b"\\302\\247", "escape"),
                 (b"\"\\302\\247\"", "c"),
+                (b"\"\\302\\247\"", "c-maybe"),
                 (b"??", "shell"),
                 (b"'??'", "shell-always"),
                 (b"''$'\\302\\247'", "shell-escape"),
@@ -832,6 +883,7 @@ mod tests {
                 (b"\xA7_", "literal-show"),
                 (b"\\247_", "escape"),
                 (b"\"\\247_\"", "c"),
+                (b"\"\\247_\"", "c-maybe"),
                 (b"?_", "shell"),
                 (b"\xA7_", "shell-show"),
                 (b"'?_'", "shell-always"),
@@ -847,6 +899,7 @@ mod tests {
                 (b"_\xA7", "literal-show"),
                 (b"_\\247", "escape"),
                 (b"\"_\\247\"", "c"),
+                (b"\"_\\247\"", "c-maybe"),
                 (b"_?", "shell"),
                 (b"_\xA7", "shell-show"),
                 (b"'_?'", "shell-always"),
@@ -862,6 +915,7 @@ mod tests {
                 (b"_\xA7_", "literal-show"),
                 (b"_\\247_", "escape"),
                 (b"\"_\\247_\"", "c"),
+                (b"\"_\\247_\"", "c-maybe"),
                 (b"_?_", "shell"),
                 (b"_\xA7_", "shell-show"),
                 (b"'_?_'", "shell-always"),
@@ -876,7 +930,7 @@ mod tests {
                 (b"?_?", "literal"),
                 (b"\xA7_\xA7", "literal-show"),
                 (b"\\247_\\247", "escape"),
-                (b"\"\\247_\\247\"", "c"),
+                (b"\"\\247_\\247\"", "c-maybe"),
                 (b"?_?", "shell"),
                 (b"\xA7_\xA7", "shell-show"),
                 (b"'?_?'", "shell-always"),
@@ -919,6 +973,10 @@ mod tests {
                     b"\"_\\300_\\247\\247_\\247\\247\\247_\\247\\247\\247\\247_\"",
                     "c",
                 ),
+                (
+                    b"\"_\\300_\\247\\247_\\247\\247\\247_\\247\\247\\247\\247_\"",
+                    "c-maybe",
+                ),
                 (b"_?_??_???_????_", "shell"),
                 (
                     b"_\xC0_\xA7\xA7_\xA7\xA7\xA7_\xA7\xA7\xA7\xA7_",
@@ -948,6 +1006,7 @@ mod tests {
                 (b"\xC2_", "literal-show"),
                 (b"\\302_", "escape"),
                 (b"\"\\302_\"", "c"),
+                (b"\"\\302_\"", "c-maybe"),
                 (b"?_", "shell"),
                 (b"\xC2_", "shell-show"),
                 (b"'?_'", "shell-always"),
@@ -967,6 +1026,7 @@ mod tests {
                 (b"?\xC2\xA7", "literal"),
                 (b"\\302\xC2\xA7", "escape"),
                 (b"\"\\302\xC2\xA7\"", "c"),
+                (b"\"\\302\xC2\xA7\"", "c-maybe"),
                 (b"?\xC2\xA7", "shell"),
                 (b"\xC2\xC2\xA7", "shell-show"),
                 (b"'?\xC2\xA7'", "shell-always"),
@@ -982,6 +1042,7 @@ mod tests {
                 (b"???", "literal"),
                 (b"\\302\\302\\247", "escape"),
                 (b"\"\\302\\302\\247\"", "c"),
+                (b"\"\\302\\302\\247\"", "c-maybe"),
                 (b"???", "shell"),
                 (b"\xC2\xC2\xA7", "shell-show"),
                 (b"'???'", "shell-always"),
@@ -998,6 +1059,7 @@ mod tests {
                 (b"\xE0\xA7_", "literal-show"),
                 (b"\\340\\247_", "escape"),
                 (b"\"\\340\\247_\"", "c"),
+                (b"\"\\340\\247_\"", "c-maybe"),
                 (b"??_", "shell"),
                 (b"\xE0\xA7_", "shell-show"),
                 (b"'??_'", "shell-always"),
@@ -1013,6 +1075,7 @@ mod tests {
                 (b"\xF0\xA7\xA7_", "literal-show"),
                 (b"\\360\\247\\247_", "escape"),
                 (b"\"\\360\\247\\247_\"", "c"),
+                (b"\"\\360\\247\\247_\"", "c-maybe"),
                 (b"???_", "shell"),
                 (b"\xF0\xA7\xA7_", "shell-show"),
                 (b"'???_'", "shell-always"),
@@ -1208,8 +1271,11 @@ mod tests {
         let style = QuotingStyle::SHELL.show_control(true);
         assert_eq!(format!("{style}"), "shell");
 
-        let style = QuotingStyle::C_DOUBLE;
+        let style = QuotingStyle::C_ALWAYS;
         assert_eq!(format!("{style}"), "c");
+
+        let style = QuotingStyle::C_MAYBE;
+        assert_eq!(format!("{style}"), "c-maybe");
 
         let style = QuotingStyle::Escape;
         assert_eq!(format!("{style}"), "escape");
