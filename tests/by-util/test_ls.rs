@@ -4216,6 +4216,22 @@ fn test_ls_quoting_style() {
                 .succeeds()
                 .stdout_only(format!("{correct}\n"));
         }
+
+        // Test difference between `c` and `c-maybe`
+        let simple: &str = "onetwo";
+        at.touch(simple);
+
+        for (arg, correct) in [
+            ("--quoting-style=c", "\"onetwo\""),
+            ("--quoting-style=c-maybe", "onetwo"),
+        ] {
+            scene
+                .ucmd()
+                .arg(arg)
+                .arg(simple)
+                .succeeds()
+                .stdout_only(format!("{correct}\n"));
+        }
     }
 
     // No-TTY
