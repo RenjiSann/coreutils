@@ -128,14 +128,20 @@ impl Quoter for CQuoter {
         if escaped.is_escaping() {
             self.must_quote = true;
         }
-        self.buffer
-            .extend(escaped.into_iter().collect::<String>().into_bytes());
+        escaped.for_each(|c| {
+            let mut buf = [0_u8; 4];
+            self.buffer.extend(c.encode_utf8(&mut buf).as_bytes());
+        });
     }
 
     fn push_invalid(&mut self, input: &[u8]) {
         for b in input {
-            let escaped: String = EscapedChar::new_octal(*b).hide_control().collect();
-            self.buffer.extend_from_slice(escaped.as_bytes());
+            let escaped_char = EscapedChar::new_octal(*b).hide_control();
+
+            escaped_char.for_each(|c| {
+                let mut buf = [0_u8; 4];
+                self.buffer.extend(c.encode_utf8(&mut buf).as_bytes());
+            });
         }
         if !input.is_empty() {
             self.must_quote = true;
