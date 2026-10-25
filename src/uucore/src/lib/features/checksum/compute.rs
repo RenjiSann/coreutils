@@ -14,6 +14,7 @@ use crate::checksum::{
     AlgoKind, ChecksumError, ReadingMode, SizedAlgoKind, digest_reader, escape_filename,
 };
 use crate::error::{FromIo, UResult, USimpleError};
+use crate::io::ustdin;
 use crate::line_ending::LineEnding;
 use crate::quoting_style::locale_aware_shell_escape;
 use crate::sum::DigestOutput;
@@ -245,7 +246,7 @@ where
         let mut file = io::BufReader::with_capacity(
             READ_BUFFER_SIZE,
             if filename == "-" {
-                stdin_buf = io::stdin();
+                stdin_buf = ustdin();
                 Box::new(stdin_buf) as Box<dyn io::Read>
             } else {
                 let filepath = Path::new(filename);
