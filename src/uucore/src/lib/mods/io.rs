@@ -25,6 +25,9 @@ use std::{
     process::Stdio,
 };
 
+#[cfg(feature = "signals")]
+use crate::{signals, translate};
+
 #[cfg(windows)]
 type NativeType = OwnedHandle;
 #[cfg(not(windows))]
@@ -149,6 +152,49 @@ pub fn read_and_discard<R: io::Read>(reader: &mut R, n: u64, buf_size: usize) ->
         }
     }
     Ok(total)
+}
+
+/// Wrapper around [`std::io::Stdin`] that checks if stdin was closed
+/// before trying to read.
+pub struct UStdin {
+    inner: io::Stdin,
+}
+
+impl UStdin {
+    fn was_closed(&self) -> io::Result<()> {
+        #[cfg(feature = "signals")]
+        if signals::stdin_was_closed() {
+            return Err(io::Error::other(translate!("error-bad-file-descriptor")));
+        }
+
+        Ok(())
+    }
+}
+
+impl io::Read for UStdin {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.was_closed()?;
+        self.inner.read(buf)
+    }
+
+    fn read_to_end(&mut self, buf: &mut Vec<u8>) -> io::Result<usize> {
+        self.was_closed()?;
+        self.inner.read_to_end(buf)
+    }
+
+    fn read_to_string(&mut self, buf: &mut String) -> io::Result<usize> {
+        self.was_closed()?;
+        self.read_to_string(buf)
+    }
+
+    fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        self.was_closed()?;
+        self.read_exact(buf)
+    }
+}
+
+pub fn ustdin() -> UStdin {
+    UStdin { inner: io::stdin() }
 }
 
 #[cfg(test)]
