@@ -218,7 +218,5 @@ pub fn checksum_main(
         line_ending,
     };
 
-    perform_checksum_computation(io::stdout(), opts, files)?;
-
-    Ok(())
+    perform_checksum_computation(io::stdout(), opts, files)
 }
