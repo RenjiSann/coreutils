@@ -228,16 +228,16 @@ pub fn perform_checksum_computation<'a, W, I>(
 ) -> UResult<()>
 where
     W: io::Write,
-    I: Iterator<Item = &'a OsStr>,
+    I: ExactSizeIterator<Item = &'a OsStr>,
 {
-    let mut files = files.peekable();
+    // Check that in raw mode, we are not provided with several files.
+    if options.output_format.is_raw() && files.len() > 1 {
+        return Err(Box::new(ChecksumError::RawMultipleFiles));
+    }
+
+    let mut files = files;
 
     while let Some(filename) = files.next() {
-        // Check that in raw mode, we are not provided with several files.
-        if options.output_format.is_raw() && files.peek().is_some() {
-            return Err(Box::new(ChecksumError::RawMultipleFiles));
-        }
-
         let stdin_buf;
         let file_buf;
 
